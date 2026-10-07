@@ -1,12 +1,12 @@
-"""Slack Socket Mode bridge for the OKÚ satire team. One app, per-persona username/icon via chat:write.customize.
-Secrets only from env (SLACK_OKU_BOT_TOKEN, SLACK_OKU_APP_TOKEN, LLM_API_KEY); never logged."""
+﻿"""Slack Socket Mode bridge for the OKĂš satire team. One app, per-persona username/icon via chat:write.customize.
+Secrets only from env (SLACK_OKU_BOT_TOKEN, SLACK_OKU_APP_TOKEN, Gemini keys via env or OKU_GEMINI_ENV_FILE); never logged."""
 import os, logging, threading, pathlib
 from . import core
 
-FALLBACK = "Technika selhala. To je kampaň!"
+FALLBACK = "Technika selhala. To je kampaĹ!"
 
 class Bridge:
-    def __init__(self, client, cfg, bot_id, gen=core.llm):
+    def __init__(self, client, cfg, bot_id, gen=core.generate):
         self.client, self.cfg, self.bot, self.gen = client, cfg, bot_id, gen
         self.prompts = {k: core.build_prompt(p) for k, p in cfg["personas"].items()}
 
@@ -42,7 +42,7 @@ class Bridge:
         self.post(ch, ts, key, reply)
         if blame and "kalousek" in self.cfg["personas"]:
             try: k = self.gen(self.prompts["kalousek"], hist + [{"role": "user", "content": reply}])
-            except Exception as e: core.log.error("llm error: %s", type(e).__name__); k = "…"
+            except Exception as e: core.log.error("llm error: %s", type(e).__name__); k = "â€¦"
             self.post(ch, ts, "kalousek", k)
 
 def main():

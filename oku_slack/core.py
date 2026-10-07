@@ -53,3 +53,54 @@ def llm(system, history, post=requests.post):
                    "messages": [{"role": "system", "content": system}] + history}, timeout=120)
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"]
+
+
+# --- Gemini backend (mirrors Umbra: GEMINI_API_KEY / GEMINI_API_KEYS rotation, GEMINI_MODEL) ---
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+GEMINI_FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+_GEMINI_NAMES = ("GEMINI_API_KEY", "GEMINI_API_KEYS", "GEMINI_MODEL")
+
+def _env_file_values(path):
+    """Read ONLY the Gemini names from an env file (e.g. Umbra's bot/.env). Values never logged."""
+    out = {}
+    try:
+        for line in pathlib.Path(path).read_text(encoding="utf-8-sig").splitlines():
+            k, sep, v = line.partition("=")
+            k = k.strip()
+            if sep and k in _GEMINI_NAMES: out[k] = v.strip().strip('"').strip("'")
+    except OSError as e:
+        log.warning("gemini env file unreadable: %s", type(e).__name__)
+    return out
+
+def gemini_settings():
+    vals = _env_file_values(os.environ["OKU_GEMINI_ENV_FILE"]) if os.environ.get("OKU_GEMINI_ENV_FILE") else {}
+    get = lambda k: os.environ.get(k) or vals.get(k, "")
+    raw = get("GEMINI_API_KEYS") or get("GEMINI_API_KEY")
+    keys = [k.strip() for k in raw.split(",") if k.strip()]
+    model = os.environ.get("LLM_MODEL") or get("GEMINI_MODEL") or "gemini-2.5-flash"
+    return keys, list(dict.fromkeys([model] + GEMINI_FALLBACK_MODELS))
+
+def gemini(system, history, post=requests.post):
+    """Model-major, key-minor (like Umbra): try best model on every key before degrading."""
+    keys, models = gemini_settings()
+    if not keys: raise RuntimeError("no GEMINI_API_KEY(S)")
+    contents = [{"role": "model" if m["role"] == "assistant" else "user", "parts": [{"text": m["content"] or "…"}]} for m in history]
+    body = {"systemInstruction": {"parts": [{"text": system}]}, "contents": contents or [{"role": "user", "parts": [{"text": "…"}]}]}
+    last = None
+    for model in models:
+        for i, key in enumerate(keys):
+            r = post(GEMINI_URL.format(model=model), headers={"x-goog-api-key": key}, json=body, timeout=90)
+            if r.status_code in (429, 500, 503, 404):
+                log.warning("gemini %s key#%d -> %s", model, i, r.status_code); last = r.status_code
+                if r.status_code == 404: break
+                continue
+            r.raise_for_status()
+            parts = (r.json().get("candidates") or [{}])[0].get("content", {}).get("parts", [])
+            text = "".join(p.get("text", "") for p in parts).strip()
+            if text: return text
+            last = "empty"
+    raise RuntimeError(f"gemini exhausted ({last})")
+
+def generate(system, history):
+    backend = os.environ.get("LLM_BACKEND", "gemini")
+    return gemini(system, history) if backend == "gemini" else llm(system, history)

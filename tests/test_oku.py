@@ -50,3 +50,32 @@ def test_llm_request(monkeypatch):
     def post(url, headers, json, timeout): seen.update(url=url, model=json["model"]); return R()
     assert core.llm("sys", [], post=post) == "ok"
     assert seen == {"url": "https://api.x.ai/v1/chat/completions", "model": "grok-4"}
+
+
+class GR:
+    def __init__(self, code, text="ahoj"): self.status_code, self._t = code, text
+    def raise_for_status(self):
+        if self.status_code >= 400: raise RuntimeError(self.status_code)
+    def json(self): return {"candidates": [{"content": {"parts": [{"text": self._t}]}}]}
+
+def test_gemini_rotation_model_major(monkeypatch, tmp_path):
+    for k in ("GEMINI_API_KEY", "GEMINI_API_KEYS", "GEMINI_MODEL", "LLM_MODEL"): monkeypatch.delenv(k, raising=False)
+    f = tmp_path / ".env"; f.write_text("DISCORD_TOKEN=x\nGEMINI_API_KEYS=k1,k2\nGEMINI_MODEL=gemini-x\n")
+    monkeypatch.setenv("OKU_GEMINI_ENV_FILE", str(f))
+    calls = []
+    def post(url, headers, json, timeout):
+        calls.append((url.split("/models/")[1].split(":")[0], headers["x-goog-api-key"]))
+        assert json["systemInstruction"]["parts"][0]["text"] == "sys"
+        assert json["contents"][1]["role"] == "model"
+        return GR(429) if len(calls) < 3 else GR(200, "dobrý")
+    out = core.gemini("sys", [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}], post=post)
+    assert out == "dobrý"
+    assert calls == [("gemini-x", "k1"), ("gemini-x", "k2"), ("gemini-2.5-flash", "k1")]
+
+def test_gemini_env_file_only_reads_gemini_names(tmp_path):
+    f = tmp_path / ".env"; f.write_text("DISCORD_TOKEN=secret\nGEMINI_API_KEY=\"k\"\n")
+    assert core._env_file_values(f) == {"GEMINI_API_KEY": "k"}
+
+def test_gemini_no_keys(monkeypatch):
+    for k in ("GEMINI_API_KEY", "GEMINI_API_KEYS", "OKU_GEMINI_ENV_FILE"): monkeypatch.delenv(k, raising=False)
+    with pytest.raises(RuntimeError): core.gemini("s", [])
