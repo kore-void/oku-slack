@@ -1,5 +1,6 @@
 """Pure logic: config, persona prompts, routing, LLM call. No Slack imports (unit-testable)."""
-import json, os, re, pathlib, tomllib, logging, requests
+import json, os, re, pathlib, tomllib, logging, time, requests
+from . import usage
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 log = logging.getLogger("oku")
@@ -47,12 +48,17 @@ def icon_url(cfg, p):
     return f"{base.rstrip('/')}/{p['avatar']}" if base and p.get("avatar") else None
 
 def llm(system, history, post=requests.post):
+    t0 = time.monotonic(); model = os.environ.get("LLM_MODEL", "grok-4")
     r = post(os.environ.get("LLM_BASE_URL", "https://api.x.ai/v1").rstrip("/") + "/chat/completions",
              headers={"Authorization": "Bearer " + os.environ["LLM_API_KEY"]},
              json={"model": os.environ.get("LLM_MODEL", "grok-4"),
                    "messages": [{"role": "system", "content": system}] + history}, timeout=120)
     r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"]
+    data = r.json(); u = data.get("usage") if isinstance(data, dict) else None
+    meta = {"promptTokenCount": u.get("prompt_tokens"), "candidatesTokenCount": u.get("completion_tokens"),
+            "totalTokenCount": u.get("total_tokens")} if isinstance(u, dict) else None
+    usage.record(data.get("model") or model, 0, time.monotonic() - t0, {"usageMetadata": meta}, backend="openai")
+    return data["choices"][0]["message"]["content"]
 
 
 # --- Gemini backend (mirrors Umbra: GEMINI_API_KEY / GEMINI_API_KEYS rotation, GEMINI_MODEL) ---
@@ -83,7 +89,7 @@ def gemini_settings():
 def gemini(system, history, post=requests.post, rounds=3, sleep=None):
     """Model-major, key-minor (like Umbra): try best model on every key before degrading.
     If everything is rate-limited, back off (exponential + jitter) and sweep again."""
-    import time, random
+    import random
     sleep = sleep or time.sleep
     keys, models = gemini_settings()
     if not keys: raise RuntimeError("no GEMINI_API_KEY(S)")
@@ -94,13 +100,16 @@ def gemini(system, history, post=requests.post, rounds=3, sleep=None):
         if rnd: sleep(min(30, 3 * 2 ** rnd) + random.uniform(0, 2))
         for model in models:
             for i, key in enumerate(keys):
+                t0 = time.monotonic()
                 r = post(GEMINI_URL.format(model=model), headers={"x-goog-api-key": key}, json=body, timeout=90)
                 if r.status_code in (429, 500, 503, 404):
                     log.warning("gemini %s key#%d -> %s", model, i, r.status_code); last = r.status_code
                     if r.status_code == 404: break
                     continue
                 r.raise_for_status()
-                parts = (r.json().get("candidates") or [{}])[0].get("content", {}).get("parts", [])
+                data = r.json()
+                usage.record(data.get("modelVersion") or model, i, time.monotonic() - t0, data)
+                parts = (data.get("candidates") or [{}])[0].get("content", {}).get("parts", [])
                 text = "".join(p.get("text", "") for p in parts).strip()
                 if text and text.strip(".\u2026 "): return text
                 last = "empty"

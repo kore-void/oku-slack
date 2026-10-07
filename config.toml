@@ -53,3 +53,15 @@ avatar = "kalousek.png"
 # optional legacy blame follow-up (top-level blame_followup = true, off by default).
 blame_only = true
 blame_patterns = ["za to může", "může za to", "může za", "kvůli kalousk", "vina kalousk", "kalousek za", "zavinil", "kalousek to"]
+
+# LLM cost ESTIMATES (configurable): USD per 1M tokens. Output price also applies to thinking tokens.
+# NOTE: keys on the Gemini free tier actually cost $0; these numbers show what paid tier would cost.
+[pricing]
+"gemini-2.5-flash" = { input = 0.30, output = 2.50 }
+"gemini-2.5-flash-lite" = { input = 0.10, output = 0.40 }
+
+# Usage reports DMed (via the Babiš app's bot client) to dm_user. Failures never affect replies.
+[reporting]
+per_call = true         # one line after each solo bot reply
+meeting_summary = true  # summary after each meeting ends
+dm_user = "U0C6XAN3EG3"

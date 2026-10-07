@@ -4,7 +4,7 @@ Thread is re-read (conversations_replies) before every turn, so human interjecti
 "stop"/"konec" work even without message.channels subscriptions."""
 import random, re, threading, time
 from collections import OrderedDict
-from . import core
+from . import core, usage
 
 STOP_WORDS = ("stop", "konec")
 TERSE = {"…", "...", ".", "", "-"}
@@ -103,6 +103,7 @@ class Meeting:
         self.c, self.ch, self.ts = coord, channel, thread_ts
         self.participants = participants
         self.stopped = False
+        self.turns = 0
 
     def transcript(self):
         b = self.c.bridges["babis"] if "babis" in self.c.bridges else next(iter(self.c.bridges.values()))
@@ -147,7 +148,7 @@ class Meeting:
             if final: extra.append("UZAVÍRÁŠ poradu: krátké shrnutí, kdo co slíbil, a finální (vymyšlený) zisk/KPI. Tentokrát žádnou otázku.")
             if interjection: extra.append("Člověk (Kore) právě vstoupil do porady – reaguj nejdřív přímo na jeho poslední zprávu.")
             text = self.c.say(spk, self.ch, self.ts, msgs, extra)
-            last_speaker = spk; history.append(spk)
+            last_speaker = spk; history.append(spk); self.turns += 1
             if not final: sleep(rng.uniform(8, 15))
         return n
 
@@ -157,6 +158,7 @@ class Coordinator:
         self.bridges, self.uid_map, self.uid_to_persona = {}, {}, {}
         self.seen = OrderedDict(); self.lock = threading.Lock(); self.max_seen = max_seen
         self.active = {}  # (ch, thread_ts) -> Meeting
+        self.reporter = None  # usage.Reporter for end-of-meeting summary DM
 
     def add(self, key, bridge):
         self.bridges[key] = bridge; self.uid_map[key] = bridge.bot; self.uid_to_persona[bridge.bot] = key
@@ -185,12 +187,22 @@ class Coordinator:
 
     def start(self, meeting, **kw):
         def go():
+            t0 = time.monotonic(); usage.begin_collect()
             try: meeting.run(**kw)
             except Exception as e: core.log.error("meeting crashed: %s", type(e).__name__)
             finally:
                 with self.lock: self.active.pop((meeting.ch, meeting.ts), None)
                 core.log.info("meeting end ch=%s ts=%s", meeting.ch, meeting.ts)
+                self.report_meeting(meeting, usage.end_collect(), time.monotonic() - t0)
         t = threading.Thread(target=go, daemon=True); t.start(); return t
+
+    def report_meeting(self, meeting, calls, duration_s):
+        try:
+            s = usage.summarize(calls, meeting.turns, duration_s)
+            core.log.info("meeting usage ch=%s ts=%s turns=%s calls=%s in=%s out=%s think=%s est=%s", meeting.ch, meeting.ts,
+                          meeting.turns, s["total"]["calls"], s["total"]["in"], s["total"]["out"], s["total"]["think"], s["total"]["usd"])
+            if self.reporter: self.reporter.meeting(calls, meeting.turns, duration_s, meeting.ch, meeting.ts)
+        except Exception as e: core.log.warning("meeting usage report failed: %s", type(e).__name__)
 
     def say(self, spk, ch, ts, msgs, extra):
         b = self.bridges[spk]; p = self.cfg["personas"][spk]
@@ -202,6 +214,7 @@ class Coordinator:
         names = ", ".join("@" + self.cfg["personas"][k]["name"].split()[0] for k in self.bridges if k != spk)
         system = b.prompt + "\n\n" + MEETING_RULES + "\n" + ROLE.get(spk, "") + f"\nKolegové na poradě: {names}."
         user = "PŘEPIS PORADY:\n" + "\n".join(lines[-40:]) + "\n\n" + " ".join(extra) + f"\nTeď mluvíš ty ({p['name']})."
+        usage.set_context(persona=spk, channel=ch, thread_ts=ts, kind="meeting")
         text = self.generate_ok(spk, system, [{"role": "user", "content": user}])
         text = self.linkify(strip_reply_mention(text, self.cfg))
         b.client.chat_postMessage(channel=ch, thread_ts=ts, text=text)

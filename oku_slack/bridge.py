@@ -3,7 +3,7 @@ Tokens per persona from env: SLACK_OKU_<KEY>_BOT_TOKEN / SLACK_OKU_<KEY>_APP_TOK
 (babis falls back to SLACK_OKU_BOT_TOKEN / SLACK_OKU_APP_TOKEN). Gemini keys via env or
 OKU_GEMINI_ENV_FILE. Secrets are never logged; only variable names / present-missing."""
 import os, sys, logging, threading
-from . import core, meeting
+from . import core, meeting, usage
 
 FALLBACK = "Technika selhala. To je kampaň!"
 
@@ -25,6 +25,7 @@ class Bridge:
         self.client, self.cfg, self.bot, self.persona, self.gen = client, cfg, bot_id, persona, gen
         self.prompt = core.build_prompt(cfg["personas"][persona])
         self.prompts = {persona: self.prompt}
+        self.reporter = None  # usage.Reporter (DM to Kore); failures never affect replies
 
     def history(self, event):
         ch = event["channel"]; msgs = [event]
@@ -51,16 +52,24 @@ class Bridge:
         blame = self.cfg.get("blame_followup", False) and self.persona == "babis" and core.is_blame(self.cfg, text)
         core.log.info("event ch=%s ts=%s persona=%s", ch, event["ts"], self.persona)
         hist = self.history(event)
+        usage.set_context(persona=self.persona, channel=ch, thread_ts=ts, kind="solo"); usage.take_last()
         try: reply = (self.gen(self.prompt, hist) or "").strip()
         except Exception as e:
             core.log.error("llm error: %s", type(e).__name__); reply = FALLBACK
         if reply in meeting.TERSE:
             reply = meeting.KALOUSEK_FALLBACK if self.persona == "kalousek" else FALLBACK
         self.post(ch, ts, reply)
+        self.report()
         if blame and "kalousek" in self.cfg["personas"]:  # optional legacy follow-up, off by default
             try: k = self.gen(core.build_prompt(self.cfg["personas"]["kalousek"]), hist + [{"role": "user", "content": reply}])
             except Exception as e: core.log.error("llm error: %s", type(e).__name__); k = meeting.KALOUSEK_FALLBACK
             self.post(ch, ts, k)
+
+    def report(self):
+        try:
+            e = usage.take_last()
+            if self.reporter and e: self.reporter.call(e)
+        except Exception as ex: core.log.warning("usage report failed: %s", type(ex).__name__)
 
 def dispatch(b, event):
     """Meeting coordinator gets first claim (dedupe by channel+ts across all persona apps)."""
@@ -86,7 +95,7 @@ def start_all(cfg, env=None, app_factory=None, handler_factory=None):
         from slack_bolt import App as app_factory
     if handler_factory is None:
         from slack_bolt.adapter.socket_mode import SocketModeHandler as handler_factory
-    started = {}; coord = meeting.Coordinator(cfg)
+    started = {}; coord = meeting.Coordinator(cfg); usage.configure(cfg)
     for key in cfg["personas"]:
         bot, apptok = tokens(key, env)
         if not (bot and apptok):
@@ -102,6 +111,9 @@ def start_all(cfg, env=None, app_factory=None, handler_factory=None):
             core.log.info("persona=%s connected user=%s", key, uid)
         except Exception as e:
             core.log.error("persona=%s failed to start: %s", key, type(e).__name__)
+    rep = usage.Reporter(started["babis"].client, cfg) if "babis" in started else None  # Babiš app DMs Kore
+    coord.reporter = rep
+    for b in started.values(): b.reporter = rep
     return started
 
 def main():
