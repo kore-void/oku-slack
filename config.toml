@@ -1,0 +1,48 @@
+# OKÚ Slack satire team. Secrets are NEVER here: SLACK_OKU_BOT_TOKEN, SLACK_OKU_APP_TOKEN, LLM_API_KEY come from env.
+default_persona = "babis"
+history_limit = 20
+# icon_url must be a public https URL; empty = Slack app's default icon.
+icon_base_url = ""
+
+[channel_defaults]
+# "C0123456789" = "alenka"
+
+[personas.babis]
+name = "Andrej Babiš (parodie)"
+dir = "babis"
+files = ["COSPLAY-v3.1.md", "hlasky-canon.md"]
+aliases = ["babiš", "babis", "andrej", "andrej babiš", "agrofert"]
+avatar = ""
+
+[personas.alenka]
+name = "Alenka Hranolka (parodie)"
+dir = "alenka"
+aliases = ["alenka", "hranolka", "alenko"]
+avatar = "alenka-hranolka.jpg"
+
+[personas.bourak]
+name = "Filip Bourák Turek (parodie)"
+dir = "bourak"
+aliases = ["bourák", "bourak", "turek", "filip", "filipe"]
+avatar = "filip-bourak.jpg"
+
+[personas.marty]
+name = "Marty Prchal (parodie)"
+dir = "marty"
+aliases = ["marty", "prchal", "marty prchal"]
+avatar = "marty-prchal.jpg"
+
+[personas.peta]
+name = "Peťa Maci (parodie)"
+dir = "peta"
+aliases = ["peťa", "peta", "maci", "macinka", "peťo"]
+avatar = "peta-maci-profile-now.jpg"
+
+[personas.kalousek]
+name = "Kalousek (parodie)"
+dir = "kalousek"
+aliases = ["kalousek", "kalousku", "kalouska", "kalouskovi"]
+avatar = "kalousek.jpg"
+# Kalousek speaks only when blamed (see his prompt). Never default/routed normally.
+blame_only = true
+blame_patterns = ["za to může", "může za to", "může za", "kvůli kalousk", "vina kalousk", "kalousek za", "zavinil", "kalousek to"]
