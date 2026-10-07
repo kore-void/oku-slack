@@ -11,6 +11,7 @@ aside{width:320px;background:#16233a;display:flex;flex-direction:column}
 #ev{font-size:20px;text-align:center} .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:center}
 #host{background:#fff;color:#222;border-radius:16px;padding:10px 14px;max-width:520px;position:relative;min-height:20px}
 #host:before{content:"🎠";position:absolute;left:-30px;top:6px;font-size:22px} #host b{color:#b03060}
+body.offline main{opacity:.55} body.offline #ev{color:#f1c40f}
 #cine{position:fixed;inset:0;width:100vw;height:100vh;display:none;z-index:10;background:#000}
 #seq{font-size:22px;color:#f1c40f;min-height:28px} #err{color:#ff7675;min-height:18px}
 </style></head><body>
@@ -26,21 +27,30 @@ aside{width:320px;background:#16233a;display:flex;flex-direction:column}
 </main>
 <aside><div id="log"></div><form id="chatf"><input id="msg" placeholder="Chat…" autocomplete="off"><button>➤</button></form></aside>
 <audio id="audio" preload="auto"></audio>
+<script src="config.js"></script>
 <script>
 const LABELS={porada:'Porada',tiskovka:'Tiskovka',kantyna:'Kantýna',disko:'Diskotéka',socky:'Sítě',vina:'Viník',bourak:'Zelená jízda',snemovna:'Sněmovna'};
 const q=new URLSearchParams(location.search), $=id=>document.getElementById(id);
 let S=null, offset=0, you=null, audioCtx=null, playingFor=null;
-const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws?p='+encodeURIComponent(q.get('p')||'')+'&k='+encodeURIComponent(q.get('k')||''));
-const send=o=>ws.send(JSON.stringify(o)), srvNow=()=>Date.now()/1000+offset;
-ws.onmessage=m=>{const d=JSON.parse(m.data);
+// WS endpoint: window.OKU_WS_URL from config.js (static deploy), else same host (local server).
+const WS_BASE=(window.OKU_WS_URL||((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws'));
+let ws=null, retry=0;
+const send=o=>{ if(ws&&ws.readyState===1) ws.send(JSON.stringify(o)); else $('err').textContent='Kolo spí, zkouším se připojit…'; }, srvNow=()=>Date.now()/1000+offset;
+function connect(){
+  ws=new WebSocket(WS_BASE+'?p='+encodeURIComponent(q.get('p')||'')+'&k='+encodeURIComponent(q.get('k')||''));
+  ws.onopen=()=>{retry=0;document.body.classList.remove('offline');$('err').textContent=''};
+  ws.onclose=()=>{document.body.classList.add('offline');$('ev').textContent='😴 Kolo spí… zkouším se znovu připojit';
+    setTimeout(connect,Math.min(30000,1000*2**Math.min(retry++,5)))};
+  ws.onmessage=onMsg;}
+function onMsg(m){const d=JSON.parse(m.data);
   if(d.type==='error'){$('err').textContent=d.msg;return} $('err').textContent='';
   if(d.you!==undefined) you=d.you;
   if(d.state){S=d.state; offset=S.now-Date.now()/1000}  // authoritative clock offset
   if(d.type==='chat') log(`<b>${esc(d.payload.player)}</b>: ${esc(d.payload.text)}`);
   else if(d.type==='hello') S.chat.forEach(c=>log(`<b>${esc(c.player)}</b>: ${esc(c.text)}`));
   else if(d.type!=='seq_step') log(`<i>${d.type}</i>`);
-  renderUI();};
-ws.onclose=()=>{$('ev').textContent='Odpojeno – obnov stránku.'};
+  renderUI();}
+connect();
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function log(h){const l=$('log');l.insertAdjacentHTML('beforeend','<div>'+h+'</div>');l.scrollTop=1e9}
 function hm(t){return new Date(t*1000).toLocaleTimeString('cs-CZ',{hour:'2-digit',minute:'2-digit'})}

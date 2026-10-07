@@ -7,3 +7,4 @@ __pycache__/
 voice/raw/
 voice/models/
 .venv-wheel/
+players.local.toml

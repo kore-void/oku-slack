@@ -9,6 +9,12 @@ def load(path=None):
     with open(path, "rb") as f: raw = tomllib.load(f)
     s = dict(DEFAULTS, **raw.get("settings", {}))
     players = raw.get("players", {})
+    # Untracked local secrets (gitignored): real room_keys etc. override the committed placeholders.
+    local = pathlib.Path(os.environ.get("OKU_WHEEL_LOCAL") or path.with_name("players.local.toml"))
+    if local.exists():
+        with open(local, "rb") as f: loc = tomllib.load(f)
+        for k, v in loc.get("players", {}).items():
+            if k in players: players[k].update(v)
     events = raw.get("events", [])
     if not players: raise ValueError("players.toml: no players")
     if not events: raise ValueError("players.toml: no events")

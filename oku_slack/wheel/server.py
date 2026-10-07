@@ -1,11 +1,36 @@
 """Room server (aiohttp): authoritative tick loop + WebSocket hub + static room + optional Slack adapter.
 Clients only render server state; they get `now` in each message to compute clock offset."""
-import asyncio, json, logging, os, pathlib, time
+import asyncio, collections, json, logging, os, pathlib, time
 from aiohttp import web, WSMsgType
 from . import config, engine, render, store
 
 log = logging.getLogger("oku_wheel")
 STATIC = pathlib.Path(__file__).parent / "static"
+
+DEFAULT_ORIGINS = ("https://itzkore.cz", "https://www.itzkore.cz", "http://127.0.0.1", "http://localhost")
+
+def allowed_origins():
+    env = os.environ.get("OKU_WHEEL_ORIGINS")
+    return tuple(o.strip().rstrip("/") for o in env.split(",") if o.strip()) if env else DEFAULT_ORIGINS
+
+def origin_ok(origin, allowed=None):
+    """Browsers always send Origin; non-browser clients (tests, CLI) send none and are allowed.
+    Localhost origins match any port."""
+    if not origin: return True
+    o = origin.rstrip("/")
+    for a in allowed or allowed_origins():
+        if o == a or (a in ("http://127.0.0.1", "http://localhost") and o.startswith(a + ":")): return True
+    return False
+
+class RateLimit:
+    """Sliding window per connection: at most `n` messages per `window` seconds."""
+    def __init__(self, n=8, window=2.0, clock=time.monotonic):
+        self.n, self.window, self.clock, self.ts = n, window, clock, collections.deque()
+    def allow(self):
+        now = self.clock()
+        while self.ts and now - self.ts[0] > self.window: self.ts.popleft()
+        if len(self.ts) >= self.n: return False
+        self.ts.append(now); return True
 
 class Hub:
     def __init__(self, eng, notify=None):
@@ -54,12 +79,20 @@ def make_app(eng, notify=None, period=0.5, run_loop=True):
     app = web.Application(); app["hub"] = hub
 
     async def ws_handler(req):
+        if not origin_ok(req.headers.get("Origin")):
+            log.warning("ws rejected: origin not allowed")
+            return web.Response(status=403, text="origin not allowed")
         p = hub.auth(req.query.get("p"), req.query.get("k"))
-        ws = web.WebSocketResponse(heartbeat=20); await ws.prepare(req)
+        ws = web.WebSocketResponse(heartbeat=20, max_msg_size=8192); await ws.prepare(req)
+        rl, strikes = RateLimit(), 0
         hub.clients[ws] = p  # p None = spectator (read-only, no code)
         await ws.send_json({"type": "hello", "you": p, "state": eng.snapshot(viewer=p)})
         async for m in ws:
             if m.type != WSMsgType.TEXT: continue
+            if not rl.allow():
+                strikes += 1
+                if strikes > 30: await ws.close(code=1008, message=b"rate limit"); break
+                await ws.send_json({"type": "error", "code": "rate_limited", "msg": "Pomaleji."}); continue
             try:
                 if p is None: raise engine.WheelError("spectator", "Jen divák (chybí ?p=&k=).")
                 async with hub.lock: await hub.handle(p, json.loads(m.data))
@@ -76,9 +109,12 @@ def make_app(eng, notify=None, period=0.5, run_loop=True):
         return web.Response(body=render.png(eng.snapshot()["wheel"], e["target_angle"] if e else 0), content_type="image/png")
     async def poster(req): return web.Response(body=render.titanic_poster(eng.cfg["scripts"].get("titanic")), content_type="image/png")
     async def index(req): return web.FileResponse(STATIC / "room.html")
+    async def config_js(req):  # local server: same-host WS; the static deploy ships its own config.js
+        return web.Response(text="window.OKU_WS_URL = null;\n", content_type="application/javascript")
 
     app.router.add_get("/", index)
     app.router.add_get("/ws", ws_handler)
+    app.router.add_get("/config.js", config_js)
     app.router.add_get("/api/state", state)
     app.router.add_get("/wheel.png", wheel_png)
     app.router.add_get("/poster.png", poster)
