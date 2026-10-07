@@ -1,0 +1,17 @@
+# Deep cuts pro #čapák (Babiš smí do JEDNÉ odpovědi vplést NEJVÝŠ JEDEN tip, jen když se ho někdo ptá na API/trading; jinak nic)
+
+1. **Free ≠ celý trh.** Alpaca zdarma dává real-time jen z burzy IEX; konsolidovaný SIP feed je zdarma jen se zpožděním 15 min. Ceny tak můžou mírně ujíždět od „skutečné“ ceny. https://docs.alpaca.markets/docs/about-market-data-api
+2. **SIP vs. direct feed.** V USA posílají všechny burzy kotace do centrálního procesoru (SIP / Consolidated Tape). HFT firmy si proto kupují přímé feedy jednotlivých burz, které jsou rychlejší. https://www.ctaplan.com/
+3. **Non-display poplatky.** Burzy účtují zvlášť, když data čte algoritmus a ne člověk na obrazovce („non-display usage“). Licence se tedy řídí tím, jak data používáš, ne jen tím, co stahuješ. https://www.nasdaqtrader.com/Trader.aspx?id=DPUsageDefinitions
+4. **Ukázat dashboard kámošům = redistribuce.** Levné plány bývají „individual/personal use only“ (Massive, Finnhub). FMP chce na zobrazování dat jiným lidem zvláštní licenci. https://site.financialmodelingprep.com/pricing-plans
+5. **Adjusted vs. unadjusted.** Po splitu 1:10 vypadá neupravená řada jako krach o 90 %. Ukládej raw ceny a zvlášť tabulku splitů a dividend, upravenou řadu si počítej sám. https://www.alphavantage.co/documentation/
+6. **Survivorship bias.** Když historie obsahuje jen dnes existující firmy, backtest vychází lépe, než by ve skutečnosti dopadl. Finnhub proto „survivorship-bias free“ data výslovně uvádí jako vlastnost. https://finnhub.io/pricing
+7. **Časové zóny.** Twelve Data zobrazuje časy v zóně burzy (NY = America/New_York). Ukládej vše v UTC, jinak ti letní čas (v USA a EU se mění v jiné týdny) rozbije svíčky. https://twelvedata.com/pricing
+8. **UTC je regulatorní standard.** MiFID II (RTS 25) vyžaduje, aby obchodní hodiny v EU byly navázané na UTC. https://eur-lex.europa.eu/eli/reg_del/2017/574/oj
+9. **WebSocket mezery.** Order book z WS je správný jen tehdy, když sedí sekvenční čísla. Při díře se musí znovu stáhnout snapshot přes REST, jak popisuje návod Binance na lokální order book [stránka ověřena jen částečně]. https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams
+10. **Heartbeat.** Coinbase odpojí WS, pokud se do 5 s nepřihlásíš k odběru, a nabízí `heartbeat` kanál. Ticho na lince je chyba, ne klid na trhu. https://docs.cdp.coinbase.com/exchange/websocket-feed/overview
+11. **Rate limity nejsou „1 dotaz = 1 kredit“.** U Twelve Data stojí výkaz zisku a ztráty 100 kreditů na symbol, u EODHD fundamenty 10 callů a intraday 5. https://twelvedata.com/pricing , https://eodhd.com/pricing
+12. **Burst limity.** Trading 212 dovolí vyčerpat celý minutový limit hned na začátku a pak čekat na `x-ratelimit-reset`. Klient si má limit hlídat sám podle hlaviček. https://docs.trading212.com/api
+13. **Dodavatelé mizí.** IEX Cloud skončil 31. 8. 2024 po tříměsíčním předstihu a XTB vypnulo API 14. 3. 2025 s předstihem zhruba měsíce. Proto adaptér a interní schéma a možnost přepnout na jiného dodavatele. https://databento.com/blog/migrating-from-iex-cloud-to-databento , https://intercom-help.eu/xtb/en/articles/3868-does-xtb-offer-investment-automation-tools
+14. **Rebrand může rozbít importy.** Polygon.io je od 30. 10. 2025 Massive a nový Python balíček se jmenuje `massive`, ne `polygon` (je to breaking change). https://github.com/massive-com/client-python/releases/tag/v2.0.1
+15. **CoinGecko zdarma chce atribuci.** Demo plán vyžaduje uvést CoinGecko jako zdroj a data jsou čerstvá „from 60 sec“. https://www.coingecko.com/en/api/pricing

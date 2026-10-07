@@ -65,3 +65,12 @@ blame_patterns = ["za to může", "může za to", "může za", "kvůli kalousk",
 per_call = true         # one line after each solo bot reply
 meeting_summary = true  # summary after each meeting ends
 dm_user = "U0C6XAN3EG3"
+
+# One-off "awaiting reply" for Babiš's #čapák post to ICIK (state in logs/capak_followup.json; never resends).
+[capak_followup]
+enabled = true
+channel = "C0C76PTMJ9Z"
+user = "U0C75FSEK2M"
+anchor_ts = "1791365300.705149"
+interval_s = 120
+hard_stop_min = 45

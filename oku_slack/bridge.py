@@ -3,7 +3,7 @@ Tokens per persona from env: SLACK_OKU_<KEY>_BOT_TOKEN / SLACK_OKU_<KEY>_APP_TOK
 (babis falls back to SLACK_OKU_BOT_TOKEN / SLACK_OKU_APP_TOKEN). Gemini keys via env or
 OKU_GEMINI_ENV_FILE. Secrets are never logged; only variable names / present-missing."""
 import os, sys, logging, threading
-from . import core, meeting, usage
+from . import core, meeting, usage, followup
 
 FALLBACK = "Technika selhala. To je kampaň!"
 
@@ -26,6 +26,17 @@ class Bridge:
         self.prompt = core.build_prompt(cfg["personas"][persona])
         self.prompts = {persona: self.prompt}
         self.reporter = None  # usage.Reporter (DM to Kore); failures never affect replies
+        self.followup = None  # followup.Followup (Babiš only); cancelled by target user's message
+        fc = cfg.get("capak_followup") or {}
+        self.capak = fc.get("channel"); self.capak_prompt = None
+        if persona == "babis" and self.capak:
+            try:
+                kb = (core.ROOT / "oku_slack" / "knowledge" / "capak_deepcuts.md").read_text(encoding="utf-8")
+                self.capak_prompt = self.prompt + "\n\n" + kb + "\n\nPokud se tě někdo ptá na API, data nebo trading, smíš do této odpovědi vplést NEJVÝŠ JEDEN tip z Deep cuts (svým stylem). Jinak žádný."
+            except OSError as e: core.log.warning("deepcuts unreadable: %s", type(e).__name__)
+
+    def prompt_for(self, ch):
+        return self.capak_prompt if (self.capak_prompt and ch == self.capak) else self.prompt
 
     def history(self, event):
         ch = event["channel"]; msgs = [event]
@@ -53,7 +64,7 @@ class Bridge:
         core.log.info("event ch=%s ts=%s persona=%s", ch, event["ts"], self.persona)
         hist = self.history(event)
         usage.set_context(persona=self.persona, channel=ch, thread_ts=ts, kind="solo"); usage.take_last()
-        try: reply = (self.gen(self.prompt, hist) or "").strip()
+        try: reply = (self.gen(self.prompt_for(ch), hist) or "").strip()
         except Exception as e:
             core.log.error("llm error: %s", type(e).__name__); reply = FALLBACK
         if reply in meeting.TERSE:
@@ -87,6 +98,10 @@ def register(app, b):
         if not ignored(event, b.bot): spawn(event)
     @app.event("message")
     def _dm(event):
+        f = getattr(b, "followup", None)
+        if f is not None:
+            try: f.on_message(event)
+            except Exception as e: core.log.warning("followup on_message failed: %s", type(e).__name__)
         if event.get("channel_type") == "im" and not ignored(event, b.bot): spawn(event)
 
 def start_all(cfg, env=None, app_factory=None, handler_factory=None):
@@ -114,6 +129,9 @@ def start_all(cfg, env=None, app_factory=None, handler_factory=None):
     rep = usage.Reporter(started["babis"].client, cfg) if "babis" in started else None  # Babiš app DMs Kore
     coord.reporter = rep
     for b in started.values(): b.reporter = rep
+    if "babis" in started:
+        try: started["babis"].followup = followup.start(started["babis"].client, cfg, core.ROOT / "logs")
+        except Exception as e: core.log.error("followup start failed: %s", type(e).__name__)
     return started
 
 def main():
