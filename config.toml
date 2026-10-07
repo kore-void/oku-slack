@@ -2,7 +2,7 @@
 default_persona = "babis"
 history_limit = 20
 # icon_url must be a public https URL; empty = Slack app's default icon.
-icon_base_url = ""
+icon_base_url = "https://raw.githubusercontent.com/kore-void/oku-slack/main/assets/avatars/"
 
 [channel_defaults]
 "C0C6W8E6NP9" = "babis"    # oku-porada
@@ -17,37 +17,37 @@ name = "Andrej Babiš (parodie)"
 dir = "babis"
 files = ["COSPLAY-v3.1.md", "hlasky-canon.md"]
 aliases = ["babiš", "babis", "andrej", "andrej babiš", "agrofert"]
-avatar = ""
+avatar = "babis.png"
 
 [personas.alenka]
 name = "Alenka Hranolka (parodie)"
 dir = "alenka"
 aliases = ["alenka", "hranolka", "alenko"]
-avatar = "alenka-hranolka.jpg"
+avatar = "alenka.png"
 
 [personas.bourak]
 name = "Filip Bourák Turek (parodie)"
 dir = "bourak"
 aliases = ["bourák", "bourak", "turek", "filip", "filipe"]
-avatar = "filip-bourak.jpg"
+avatar = "bourak.png"
 
 [personas.marty]
 name = "Marty Prchal (parodie)"
 dir = "marty"
 aliases = ["marty", "prchal", "marty prchal"]
-avatar = "marty-prchal.jpg"
+avatar = "marty.png"
 
 [personas.peta]
 name = "Peťa Maci (parodie)"
 dir = "peta"
 aliases = ["peťa", "peta", "maci", "macinka", "peťo"]
-avatar = "peta-maci-profile-now.jpg"
+avatar = "peta.png"
 
 [personas.kalousek]
 name = "Kalousek (parodie)"
 dir = "kalousek"
 aliases = ["kalousek", "kalousku", "kalouska", "kalouskovi"]
-avatar = "kalousek.jpg"
+avatar = "kalousek.png"
 # Kalousek speaks only when blamed (see his prompt). Never default/routed normally.
 blame_only = true
 blame_patterns = ["za to může", "může za to", "může za", "kvůli kalousk", "vina kalousk", "kalousek za", "zavinil", "kalousek to"]

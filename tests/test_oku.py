@@ -30,7 +30,7 @@ class FakeClient:
     def conversations_replies(self, **kw): return {"messages": [{"user": "U1", "text": "<@B> Alenko?"}]}
 
 def test_handle_posts_as_persona_with_kalousek():
-    c = FakeClient(); b = Bridge(c, CFG, "B", gen=lambda s, h: "odpověď")
+    c = FakeClient(); b = Bridge(c, dict(CFG, icon_base_url=""), "B", gen=lambda s, h: "odpověď")
     b.handle({"channel": "C", "ts": "1", "text": "<@B> Babiši, za to může Kalousek?"})
     assert [p["username"] for p in c.posts] == ["Andrej Babiš (parodie)", "Kalousek (parodie)"]
     assert all(p["thread_ts"] == "1" and "icon_url" not in p for p in c.posts)
@@ -39,7 +39,7 @@ def test_llm_failure_fallback_and_icon():
     c = FakeClient(); cfg = dict(CFG, icon_base_url="https://x.example/av")
     def boom(s, h): raise RuntimeError
     Bridge(c, cfg, "B", gen=boom).handle({"channel": "C", "ts": "2", "thread_ts": "1", "text": "Alenko"})
-    assert c.posts[0]["text"] == FALLBACK and c.posts[0]["icon_url"] == "https://x.example/av/alenka-hranolka.jpg"
+    assert c.posts[0]["text"] == FALLBACK and c.posts[0]["icon_url"] == "https://x.example/av/alenka.png"
 
 def test_llm_request(monkeypatch):
     monkeypatch.setenv("LLM_API_KEY", "dummy")
