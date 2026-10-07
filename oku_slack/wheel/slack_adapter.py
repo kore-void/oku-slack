@@ -2,7 +2,7 @@
 Uses a DEDICATED app (env SLACK_OKU_WHEEL_BOT_TOKEN / SLACK_OKU_WHEEL_APP_TOKEN, manifests/kolo.yaml) so a second
 Socket Mode connection never steals events from the live persona bridge. Tokens are read from env, never logged."""
 import logging, os, time
-from . import engine, render
+from . import canvas, engine, render
 
 log = logging.getLogger("oku_wheel.slack")
 MODAL_ID = "kolo_confirm"
@@ -84,6 +84,41 @@ def notification(eng, kind, obj):
     if kind == "seq_start": return f"⚡ {eng.cfg['players'][obj['player']]['name']}: *{obj['label']}* (2 min)."
     return None
 
+def _code(e):
+    r = getattr(e, "response", None)
+    try: return r["error"]
+    except Exception: return type(e).__name__
+
+def _permalink(resp):
+    f = (resp.get("file") if hasattr(resp, "get") else None) or ((resp.get("files") or [{}])[0] if hasattr(resp, "get") else {})
+    return (f or {}).get("permalink") or (f or {}).get("url_private")
+
+def make_poster(eng, client, channel, sync=None):
+    """notify(kind, obj): channel messages + spin GIF in thread + result PNG embedded in the live canvas.
+    Every Slack error is logged by code (missing_scope, not_in_channel, ...) and swallowed."""
+    def post(kind, obj):
+        if sync: sync.request()
+        text = notification(eng, kind, obj)
+        if not (text and channel): return
+        segs = eng.snapshot()["wheel"]
+        try:
+            if kind == "spin":
+                r = client.chat_postMessage(channel=channel, text=text)
+                ts = r.get("ts") if hasattr(r, "get") else None
+                gif = render.spin_gif(segs, obj["target_angle"], turns=obj.get("turns", 5), title=obj["title"])
+                client.files_upload_v2(channel=channel, thread_ts=ts, content=gif, filename="kolo-spin.gif", title="Kolo se točí")
+            elif kind == "reveal":
+                img = render.png(segs, obj["target_angle"], title=obj["title"])
+                r = client.files_upload_v2(channel=channel, content=img, filename="kolo.png", title=obj["title"], initial_comment=text)
+                if sync: sync.set_image(_permalink(r))
+            elif kind == "live" and obj.get("legendary"):
+                img = render.titanic_poster(eng.cfg["scripts"].get(obj.get("script")))
+                client.files_upload_v2(channel=channel, content=img, filename="titanic.png", title=obj["title"], initial_comment=text)
+            else: client.chat_postMessage(channel=channel, text=text)
+        except Exception as e:
+            log.warning("slack post %s failed: %s", kind, _code(e))
+    return post
+
 def start(eng):
     """Connect the dedicated Kolo app over Socket Mode. Returns notify(kind, obj) for the room server."""
     from slack_bolt import App
@@ -92,16 +127,8 @@ def start(eng):
     if not (bot and apptok): log.warning("Slack adapter disabled: SLACK_OKU_WHEEL_* not set"); return None
     app = App(token=bot); channel = eng.cfg["settings"].get("slack_channel")
 
-    def post(kind, obj):
-        text = notification(eng, kind, obj)
-        if not (text and channel): return
-        if kind == "reveal":
-            img = render.png(eng.snapshot()["wheel"], obj["target_angle"], title=obj["title"])
-            app.client.files_upload_v2(channel=channel, content=img, filename="kolo.png", title=obj["title"], initial_comment=text)
-        elif kind == "live" and obj.get("legendary"):
-            img = render.titanic_poster(eng.cfg["scripts"].get(obj.get("script")))
-            app.client.files_upload_v2(channel=channel, content=img, filename="titanic.png", title=obj["title"], initial_comment=text)
-        else: app.client.chat_postMessage(channel=channel, text=text)
+    sync = canvas.CanvasSync(eng, app.client, channel, eng.store); sync.run()
+    post = make_poster(eng, app.client, channel, sync)
 
     @app.command("/kolo")
     def _kolo(ack, body, client):
@@ -117,6 +144,7 @@ def start(eng):
         code = view["state"]["values"]["code"]["v"]["value"]
         errs = handle_modal(eng, body["user"]["id"], view["private_metadata"], code)
         ack(response_action="errors", errors=errs) if errs else ack()
+        if not errs: post("confirm", {})
 
     SocketModeHandler(app, apptok).connect()
     log.info("Slack adapter connected")

@@ -3,9 +3,17 @@ Geometry matches the room: pointer at top, segment i clockwise from 0 deg, wheel
 import io, math
 from PIL import Image, ImageDraw, ImageFont
 
+FONT_CANDIDATES = ("C:/Windows/Fonts/segoeuib.ttf", "C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/arial.ttf",
+                   "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "DejaVuSans-Bold.ttf", "DejaVuSans.ttf")
+LABELS = {"porada": "Porada", "tiskovka": "Tiskovka", "kantyna": "Kantýna", "disko": "Diskotéka", "socky": "Sítě",
+          "vina": "Viník", "bourak": "Zelená jízda", "snemovna": "Sněmovna"}
+_fcache = {}
+
 def _font(size):
-    for f in ("C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/arial.ttf", "DejaVuSans-Bold.ttf", "DejaVuSans.ttf"):
-        try: return ImageFont.truetype(f, size)
+    size = max(8, int(size))
+    if size in _fcache: return _fcache[size]
+    for f in FONT_CANDIDATES:
+        try: _fcache[size] = ImageFont.truetype(f, size); return _fcache[size]
         except OSError: pass
     return ImageFont.load_default()
 
@@ -13,37 +21,152 @@ def _pt(cx, cy, r, deg):  # deg clockwise from top
     a = math.radians(deg - 90)
     return cx + r * math.cos(a), cy + r * math.sin(a)
 
-def svg(segments, angle=0.0, size=512):
-    n, c, r = len(segments), size / 2, size / 2 - 12
-    seg, out = 360 / n, [f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 {size} {size}">',
-                         f'<g transform="rotate({-angle:.3f} {c} {c})">']
-    for i, s in enumerate(segments):
-        x1, y1 = _pt(c, c, r, i * seg); x2, y2 = _pt(c, c, r, (i + 1) * seg)
-        tx, ty = _pt(c, c, r * 0.62, (i + 0.5) * seg)
-        out.append(f'<path d="M{c},{c} L{x1:.1f},{y1:.1f} A{r},{r} 0 0 1 {x2:.1f},{y2:.1f} Z" fill="{s["color"]}" stroke="#fff" stroke-width="2"/>')
-        out.append(f'<text x="{tx:.1f}" y="{ty:.1f}" fill="#fff" font-family="Arial" font-size="18" font-weight="bold" '
-                   f'text-anchor="middle" transform="rotate({(i + 0.5) * seg:.1f} {tx:.1f} {ty:.1f})">{s["key"]}</text>')
-    out.append('</g>')
-    out.append(f'<polygon points="{c - 16},4 {c + 16},4 {c},40" fill="#e74c3c" stroke="#fff" stroke-width="2"/></svg>')
-    return "".join(out)
+def _rgb(h):
+    h = h.lstrip("#"); return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
 
-def png(segments, angle=0.0, size=512, title=None):
-    """Draw the wheel already stopped at `angle` (the value from engine.spin). Returns PNG bytes."""
-    S = size * 2  # supersample
-    img = Image.new("RGBA", (S, S + (120 if title else 0)), (255, 255, 255, 255))
-    d = ImageDraw.Draw(img)
-    n, c, r = len(segments), S / 2, S / 2 - 24
-    seg, f = 360 / n, _font(34)
+def _mix(c, d, t): return tuple(int(c[i] + (d[i] - c[i]) * t) for i in range(3))
+
+def label_of(s): return s.get("label") or LABELS.get(s["key"], s["key"].capitalize())
+
+def _radial(size, inner, outer, power=1.0):
+    """RGB radial gradient (inner at center -> outer at edge)."""
+    from PIL import ImageChops  # noqa: F401
+    m = Image.radial_gradient("L").resize((size, size), Image.BICUBIC)  # 0 center .. 255 edge
+    if power != 1.0: m = m.point(lambda v: int(255 * (v / 255) ** power))
+    return Image.composite(Image.new("RGB", (size, size), outer), Image.new("RGB", (size, size), inner), m)
+
+def wheel_layer(segments, R):
+    """Rotatable wheel face (segments + labels + separators) of radius R, RGBA 2R x 2R, drawn at angle 0."""
+    D = 2 * R; n = len(segments); seg = 360 / n
+    face = Image.new("RGBA", (D, D), (0, 0, 0, 0))
     for i, s in enumerate(segments):
-        a0 = i * seg - angle - 90  # Pillow: 0 deg = 3 o'clock, clockwise
-        d.pieslice([c - r, c - r, c + r, c + r], a0, a0 + seg, fill=s["color"], outline="white", width=4)
-        tx, ty = _pt(c, c, r * 0.62, (i + 0.5) * seg - angle)
-        d.text((tx, ty), s["key"], fill="white", font=f, anchor="mm")
-    d.ellipse([c - 40, c - 40, c + 40, c + 40], fill="white")
-    d.polygon([(c - 32, 8), (c + 32, 8), (c, 80)], fill="#e74c3c", outline="white")
-    if title: d.text((c, S + 60), title, fill="black", font=_font(48), anchor="mm")
-    img = img.resize((size, img.height // 2), Image.LANCZOS)
-    b = io.BytesIO(); img.save(b, "PNG"); return b.getvalue()
+        c = _rgb(s.get("color", "#888888"))
+        grad = _radial(D, _mix(c, (255, 255, 255), 0.35), _mix(c, (0, 0, 0), 0.35), power=0.8)
+        mask = Image.new("L", (D, D), 0)
+        ImageDraw.Draw(mask).pieslice([0, 0, D - 1, D - 1], i * seg - 90, (i + 1) * seg - 90, fill=255)
+        face.paste(grad, (0, 0), mask)
+    d = ImageDraw.Draw(face)
+    for i in range(n):  # gold separators
+        x, y = _pt(R, R, R, i * seg); d.line([(R, R), (x, y)], fill=(255, 214, 102), width=max(2, R // 90))
+    fs = max(12, int(R * 0.105 * min(1.0, 8 / n) ** 0.5))
+    for i, s in enumerate(segments):  # radial labels, reading outward
+        txt = label_of(s); f = _font(fs)
+        while f.getlength(txt) > R * 0.58 and fs > 10: fs -= 1; f = _font(fs)
+        w = int(f.getlength(txt)) + fs; h = int(fs * 1.6)
+        t = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        ImageDraw.Draw(t).text((w / 2, h / 2), txt, font=f, fill="white", anchor="mm",
+                               stroke_width=max(1, fs // 9), stroke_fill=(30, 15, 10))
+        mid = (i + 0.5) * seg
+        t = t.rotate(90 - mid, resample=Image.BICUBIC, expand=True)  # text baseline along the radius
+        cx, cy = _pt(R, R, R * 0.62, mid)
+        face.alpha_composite(t, (int(cx - t.width / 2), int(cy - t.height / 2)))
+        fs = max(12, int(R * 0.105 * min(1.0, 8 / n) ** 0.5))
+    return face
+
+def _blur(im, r):
+    from PIL import ImageFilter
+    return im.filter(ImageFilter.GaussianBlur(r))
+
+def stage(N, k, title=None):
+    """Static parts at supersample k: background, shadow, rim, bulbs anchors. Returns (bg, geom)."""
+    S = N * k; cx, cy, R = S / 2, S * 0.47, int(S * 0.38)
+    bg = _radial(S, (52, 26, 78), (6, 4, 12), power=0.7).convert("RGBA")
+    glow = Image.new("L", (S, S), 0)
+    ImageDraw.Draw(glow).ellipse([cx - R * 1.3, cy - R * 1.45, cx + R * 1.3, cy + R * 1.1], fill=120)
+    bg.alpha_composite(Image.merge("RGBA", (*Image.new("RGB", (S, S), (255, 220, 150)).split(), _blur(glow, S / 14))))
+    sh = Image.new("L", (S, S), 0)
+    ImageDraw.Draw(sh).ellipse([cx - R * 1.05, cy - R * 0.95 + S * 0.03, cx + R * 1.05, cy + R * 1.15 + S * 0.03], fill=190)
+    bg.alpha_composite(Image.merge("RGBA", (*Image.new("RGB", (S, S), (0, 0, 0)).split(), _blur(sh, S / 40))))
+    return bg, (cx, cy, R)
+
+def _rim(img, cx, cy, R, phase, nb=24):
+    d = ImageDraw.Draw(img); w = R * 0.11
+    for j in range(12):  # gold ring with vertical-ish shading via concentric strokes
+        t = j / 11; col = _mix((120, 80, 10), (255, 225, 120), 1 - abs(t - 0.4) * 1.6 if abs(t - 0.4) < 0.6 else 0.05)
+        r = R + w * (1 - t)
+        d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=col, width=int(w / 10) + 2)
+    d.ellipse([cx - R, cy - R, cx + R, cy + R], outline=(90, 55, 5), width=max(2, int(R / 120)))
+    glow = Image.new("RGBA", img.size, (0, 0, 0, 0)); gd = ImageDraw.Draw(glow)
+    rb = R * 0.032; rr = R + w * 0.5
+    for b in range(nb):
+        x, y = _pt(cx, cy, rr, b * 360 / nb)
+        lit = (b + phase) % 2 == 0
+        if lit: gd.ellipse([x - rb * 2.6, y - rb * 2.6, x + rb * 2.6, y + rb * 2.6], fill=(255, 230, 120, 150))
+    img.alpha_composite(_blur(glow, rb * 1.4))
+    d = ImageDraw.Draw(img)
+    for b in range(nb):
+        x, y = _pt(cx, cy, rr, b * 360 / nb); lit = (b + phase) % 2 == 0
+        d.ellipse([x - rb, y - rb, x + rb, y + rb], fill=(255, 250, 215) if lit else (120, 90, 40), outline=(80, 50, 0))
+        if lit: d.ellipse([x - rb * 0.45, y - rb * 0.6, x + rb * 0.1, y - rb * 0.1], fill=(255, 255, 255))
+
+def _hub(img, cx, cy, R):
+    r = int(R * 0.17); D = 2 * r
+    disc = _radial(D, (255, 236, 160), (150, 95, 10), power=1.3).convert("RGBA")
+    m = Image.new("L", (D, D), 0); ImageDraw.Draw(m).ellipse([0, 0, D - 1, D - 1], fill=255); disc.putalpha(m)
+    hl = Image.new("L", (D, D), 0); ImageDraw.Draw(hl).ellipse([D * 0.18, D * 0.06, D * 0.82, D * 0.5], fill=140)
+    from PIL import ImageChops
+    disc.alpha_composite(Image.merge("RGBA", (*Image.new("RGB", (D, D), (255, 255, 255)).split(), ImageChops.multiply(_blur(hl, D / 25), m))))
+    d = ImageDraw.Draw(disc)
+    d.ellipse([2, 2, D - 3, D - 3], outline=(110, 60, 0), width=max(2, D // 40))
+    d.text((r, r + D * 0.02), "OKÚ", font=_font(D * 0.3), fill=(140, 20, 30), anchor="mm", stroke_width=max(1, D // 60), stroke_fill=(255, 240, 200))
+    img.alpha_composite(disc, (int(cx - r), int(cy - r)))
+
+def _pointer(img, cx, cy, R):
+    top = cy - R - R * 0.16; tip = cy - R + R * 0.13; hw = R * 0.085
+    poly = [(cx - hw, top), (cx + hw, top), (cx, tip)]
+    sh = Image.new("L", img.size, 0); ImageDraw.Draw(sh).polygon([(x + R * 0.02, y + R * 0.03) for x, y in poly], fill=170)
+    img.alpha_composite(Image.merge("RGBA", (*Image.new("RGB", img.size, (0, 0, 0)).split(), _blur(sh, R * 0.02))))
+    d = ImageDraw.Draw(img)
+    d.polygon(poly, fill=(215, 25, 40), outline=(255, 214, 102), width=max(2, int(R / 90)))
+    d.polygon([(cx - hw * 0.55, top + R * 0.02), (cx - hw * 0.1, top + R * 0.02), (cx - hw * 0.05, tip - R * 0.07)], fill=(255, 110, 110))
+    d.ellipse([cx - hw * 0.45, top - hw * 0.45, cx + hw * 0.45, top + hw * 0.45], fill=(255, 214, 102), outline=(120, 70, 0))
+
+def _banner(img, title, S):
+    d = ImageDraw.Draw(img); f = _font(S * 0.045)
+    txt = title
+    while f.getlength(txt) > S * 0.8: f = _font(f.size - 2)
+    w = f.getlength(txt) + S * 0.08; y = S * 0.915; h = S * 0.085
+    x0, x1 = S / 2 - w / 2, S / 2 + w / 2
+    d.polygon([(x0 - S * 0.04, y - h * 0.3), (x0, y - h * 0.3), (x0, y + h * 0.7), (x0 - S * 0.04, y + h * 0.7), (x0 - S * 0.02, y + h * 0.2)], fill=(150, 15, 25))
+    d.polygon([(x1 + S * 0.04, y - h * 0.3), (x1, y - h * 0.3), (x1, y + h * 0.7), (x1 + S * 0.04, y + h * 0.7), (x1 + S * 0.02, y + h * 0.2)], fill=(150, 15, 25))
+    d.rounded_rectangle([x0, y - h / 2, x1, y + h / 2], radius=int(h / 4), fill=(205, 25, 40), outline=(255, 214, 102), width=max(2, int(S / 300)))
+    d.text((S / 2, y), txt, font=f, fill="white", anchor="mm", stroke_width=max(1, int(S / 500)), stroke_fill=(90, 0, 10))
+
+class WheelRenderer:
+    """Caches static layers so GIF frames only rotate the face. k = supersampling factor."""
+    def __init__(self, segments, size=800, k=2):
+        self.N, self.k = size, k
+        self.bg, (self.cx, self.cy, self.R) = stage(size, k)
+        self.face = wheel_layer(segments, self.R)
+
+    def frame(self, angle, phase=0, title=None):
+        img = self.bg.copy()
+        f = self.face.rotate(angle % 360, resample=Image.BICUBIC)
+        img.alpha_composite(f, (int(self.cx - self.R), int(self.cy - self.R)))
+        _rim(img, self.cx, self.cy, self.R, phase)
+        _hub(img, self.cx, self.cy, self.R)
+        _pointer(img, self.cx, self.cy, self.R)
+        if title: _banner(img, title, self.N * self.k)
+        return img.convert("RGB").resize((self.N, self.N), Image.LANCZOS)
+
+def png(segments, angle=0.0, size=800, title=None, k=3):
+    """High-quality still of the wheel stopped at `angle` (from engine.spin), k-times supersampled. PNG bytes."""
+    img = WheelRenderer(segments, size, k).frame(angle, 0, title)
+    b = io.BytesIO(); img.save(b, "PNG", optimize=True); return b.getvalue()
+
+def spin_gif(segments, target_angle, turns=5, frames=40, seconds=3.2, size=420, title=None, hold_ms=2200, k=2):
+    """Animated spin: same geometry and ease-out as the room ((turns*360+target) * (1-(1-t)^3)).
+    Marquee bulbs blink, last frame = exact result with banner held ~2 s. Adaptive palette per frame."""
+    wr = WheelRenderer(segments, size, k); total = turns * 360 + target_angle; out = []
+    for i in range(frames):
+        t = i / (frames - 1)
+        a = target_angle if i == frames - 1 else (total * (1 - (1 - t) ** 3)) % 360
+        im = wr.frame(a, phase=(i // 2) % 2, title=title if i == frames - 1 else None)
+        out.append(im.quantize(colors=128, method=Image.Quantize.MEDIANCUT))  # own palette per frame
+    durs = [int(seconds * 1000 / frames)] * (frames - 1) + [hold_ms]
+    b = io.BytesIO()
+    out[0].save(b, "GIF", save_all=True, append_images=out[1:], duration=durs, loop=0, optimize=True, disposal=1)
+    return b.getvalue()
 
 def segment_at(n, angle):
     """Which segment is under the top pointer when the wheel is rotated by -angle."""
@@ -87,3 +210,18 @@ def titanic_poster(script=None, size=(1024, 640)):
     d.rectangle([0, H - 36, W, H], fill=(0, 0, 0))
     d.text((W / 2, H - 18), script.get("credits", "Produkce: Marty Prchal, marketingový génius"), fill="white", font=_font(18), anchor="mm")
     b = io.BytesIO(); img.save(b, "PNG"); return b.getvalue()
+
+def svg(segments, angle=0.0, size=512):
+    """Lightweight SVG of the wheel (docs / fallback). Same geometry as png()."""
+    n, c, r = len(segments), size / 2, size / 2 - 12
+    seg, out = 360 / n, [f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 {size} {size}">',
+                         f'<g transform="rotate({-angle:.3f} {c} {c})">']
+    for i, s in enumerate(segments):
+        x1, y1 = _pt(c, c, r, i * seg); x2, y2 = _pt(c, c, r, (i + 1) * seg)
+        tx, ty = _pt(c, c, r * 0.62, (i + 0.5) * seg)
+        out.append(f'<path d="M{c},{c} L{x1:.1f},{y1:.1f} A{r},{r} 0 0 1 {x2:.1f},{y2:.1f} Z" fill="{s["color"]}" stroke="#ffd666" stroke-width="2"/>')
+        out.append(f'<text x="{tx:.1f}" y="{ty:.1f}" fill="#fff" font-family="Segoe UI, Arial" font-size="18" font-weight="bold" '
+                   f'text-anchor="middle" transform="rotate({(i + 0.5) * seg - 90:.1f} {tx:.1f} {ty:.1f})">{label_of(s)}</text>')
+    out.append('</g>')
+    out.append(f'<polygon points="{c - 16},4 {c + 16},4 {c},40" fill="#d71928" stroke="#ffd666" stroke-width="2"/></svg>')
+    return "".join(out)

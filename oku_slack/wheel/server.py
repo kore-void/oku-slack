@@ -39,11 +39,11 @@ class Hub:
     async def handle(self, p, msg):
         t, eid, e = msg.get("type"), msg.get("event_id"), self.eng
         if t == "spin": ev = e.spin(p, force=msg.get("force") or None); await self.broadcast("spin", ev); self._notify("spin", ev)
-        elif t == "code": await self.broadcast("confirm", e.confirm_code(eid, p, msg.get("code")))
+        elif t == "code": ev = e.confirm_code(eid, p, msg.get("code")); await self.broadcast("confirm", ev); self._notify("confirm", ev)
         elif t == "hold_start": e.hold_start(eid, p)
-        elif t == "hold_end": await self.broadcast("confirm", e.hold_end(eid, p))
+        elif t == "hold_end": ev = e.hold_end(eid, p); await self.broadcast("confirm", ev); self._notify("confirm", ev)
         elif t == "command": q = e.use_command(p); await self.broadcast("seq_start", q); self._notify("seq_start", q)
-        elif t == "chat": await self.broadcast("chat", e.chat(p, msg.get("text")))
+        elif t == "chat": m = e.chat(p, msg.get("text")); await self.broadcast("chat", m); self._notify("chat", m)
         else: raise engine.WheelError("bad_type", str(t))
 
     def _notify(self, kind, obj):

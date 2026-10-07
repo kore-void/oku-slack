@@ -186,7 +186,7 @@ class Engine:
             sc = self.cfg.get("scripts", {}).get(e.get("script") or "")
             if sc: e["script_data"] = {k: sc[k] for k in ("title", "cast", "beats", "credits", "credits_quote", "duration_s") if k in sc}
         return {"now": now, "event": e, "settings": {k: self.s[k] for k in ("spin_ms", "hold_min_s")},
-                "wheel": [{"key": x["key"], "title": x["title"], "color": x.get("color", "#888")} for x in self.cfg["events"]],
+                "wheel": [{"key": x["key"], "title": x["title"], "color": x.get("color", "#888"), "label": x.get("label")} for x in self.cfg["events"]],
                 "players": {k: {"name": v["name"], "cooldown_left": self.cooldown_left(k)} for k, v in self.cfg["players"].items()},
                 "sequences": [q for q in self.store.sequences() if q["state"] == "running"],
                 "chat": self.store.chat()}

@@ -17,6 +17,9 @@ oauth_config:
       - commands
       - chat:write
       - files:write
+      - files:read
+      - canvases:write
+      - canvases:read
 settings:
   interactivity:
     is_enabled: true

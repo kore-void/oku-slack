@@ -77,3 +77,11 @@ Triggers: spin (or `legendary`), `reveal` after the spin animation (`spin_ms`), 
 ## Heimdall
 `C:\code\heimdall\services.d\oku_wheel.toml` (`autostart = false`). Start only after `SLACK_OKU_WHEEL_BOT_TOKEN` / `SLACK_OKU_WHEEL_APP_TOKEN` exist:
 `cd C:\code\heimdall; python -m heimdall start oku_wheel`
+
+## Slack canvas + spin GIF
+- `canvas.py`: channel canvas "OKÚ Kolo · živě" in `slack_channel` (conversations.canvases.create; if the channel already has one, a standalone canvas shared read-only to the channel). Id stored in SQLite `kv.canvas_id`, reused after restart.
+  Full rewrite (canvases.edit replace) on state changes, max 1 edit / 3 s, plus a 60 s refresh (countdown, cooldowns). Content: event + state + start, per-player confirmation, Monika's latest line, Titanic beat (caption, direction, lines) during a legendary event, result PNG link, charged-command cooldowns, active sequence step, last 10 room chat messages. The event code is never put in the canvas.
+  Slack errors (missing_scope, not_in_channel, ...) are logged by code with a 5 min backoff; the service keeps running.
+- `render.spin_gif`: 40 frames, 420 px, ease-out identical to the room, blinking marquee bulbs, adaptive palette per frame, last frame = result with banner (2.2 s), ~1.7 MB. Posted in the thread of the spin message.
+- `render.png`: 800 px, 3x supersampled: radial-gradient segments, gold rim with marquee bulbs, glossy OKÚ hub, pointer with shadow, stage spotlight, Czech labels (Segoe UI Bold).
+- Bot scopes (manifests/kolo.yaml): commands, chat:write, files:write, files:read, canvases:write, canvases:read.
