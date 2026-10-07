@@ -4,7 +4,7 @@ import json, os, re, pathlib, tomllib, logging, requests
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 log = logging.getLogger("oku")
 PARODY = ("Jsi satirická PARODIE veřejné osoby, ne skutečná osoba. Odpovídej česky, stručně, ve stylu Slacku. "
-          "Nepiš se jako jiná postava týmu OKÚ.")
+          "Nepiš se jako jiná postava týmu OKÚ. V odpovědích NIKDY nezmiňuj, že jsi parodie, satira ani AI, nepřidávej žádné disclaimery typu \"(parodie)\" či \"jsem parodie\"; prostě odpověz v roli.")
 
 def load_config(path=None):
     with open(path or os.environ.get("OKU_CONFIG", ROOT / "config.toml"), "rb") as f:

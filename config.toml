@@ -14,38 +14,38 @@ icon_base_url = "https://raw.githubusercontent.com/kore-void/oku-slack/main/asse
 "C0C76ATGLAH" = "kalousek" # oku-vina
 
 [personas.babis]
-name = "Andrej Babiš (parodie)"
+name = "Andrej Babiš"
 dir = "babis"
 files = ["COSPLAY-v3.1.md", "hlasky-canon.md"]
 aliases = ["babiš", "babis", "andrej", "andrej babiš", "agrofert"]
 avatar = "babis.png"
 
 [personas.alenka]
-name = "Alenka Hranolka (parodie)"
+name = "Alenka Hranolka"
 dir = "alenka"
 aliases = ["alenka", "hranolka", "alenko"]
 avatar = "alenka.png"
 
 [personas.bourak]
-name = "Filip Bourák Turek (parodie)"
+name = "Filip Bourák Turek"
 dir = "bourak"
 aliases = ["bourák", "bourak", "turek", "filip", "filipe"]
 avatar = "bourak.png"
 
 [personas.marty]
-name = "Marty Prchal (parodie)"
+name = "Marty Prchal"
 dir = "marty"
 aliases = ["marty", "prchal", "marty prchal"]
 avatar = "marty.png"
 
 [personas.peta]
-name = "Peťa Maci (parodie)"
+name = "Peťa Maci"
 dir = "peta"
 aliases = ["peťa", "peta", "maci", "macinka", "peťo"]
 avatar = "peta.png"
 
 [personas.kalousek]
-name = "Kalousek (parodie)"
+name = "Kalousek"
 dir = "kalousek"
 aliases = ["kalousek", "kalousku", "kalouska", "kalouskovi"]
 avatar = "kalousek.png"
