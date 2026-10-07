@@ -1,7 +1,7 @@
 import os, pathlib, tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-DEFAULTS = dict(cooldown_s=1800, sequence_s=120, alarm_before_s=300, lead_s=600, confirm_wait_s=1800,
+DEFAULTS = dict(cooldown_s=1800, sequence_s=120, alarm_before_s=300, lead_s=600, confirm_wait_s=60,
                 hold_min_s=2.0, spin_ms=6000, slack_channel="")
 
 def load(path=None):

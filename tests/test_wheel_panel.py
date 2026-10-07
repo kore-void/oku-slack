@@ -71,7 +71,7 @@ def test_blocks_show_layout():
     assert t.count(ev["title"]) == 2  # image title + alt only, never repeated in text
     f = [b for b in bl if b.get("fields")][0]["fields"]
     assert [x["text"].split("\n")[0] for x in f] == ["*Start*", "*Potvrzení*", "*Nabité příkazy*", "*Sekvence*"]
-    assert "✅ <@U0C6XAN3EG3>" in f[1]["text"] and "⏳ ICIK" in f[1]["text"] and "{ago}" in f[0]["text"]
+    assert "✅ <@U0C6XAN3EG3>" in f[1]["text"] and "⏳ <@U0C75FSEK2M>" in f[1]["text"] and "{ago}" in f[0]["text"]
     assert sum(1 for b in bl if b["type"] == "divider") == 1 and ev["code"] not in t
     for bad in ("127.0.0.1", "localhost", "podržením", "roomce", "http://"): assert bad not in t
     act = [b for b in bl if b["type"] == "actions"][0]["elements"]
@@ -96,7 +96,7 @@ def test_actions_overflow_modal_with_code_and_cooldown():
     def body(a, **x): return {"actions": [dict(action_id=a, **x)], "user": {"id": "U0C6XAN3EG3"}, "channel": {"id": "C0C6W8E6NP9"}, "trigger_id": "T1"}
     r = SA.handle_action(e, sl, body("kolo_spin"), post=lambda k, o: posted.append(k), pnl=p)
     assert r["spin"] and sl.names()[-1] == "ephemeral"
-    SA.handle_action(e, sl, body("kolo_spin"), pnl=p); assert "Už běží" in sl.calls[-1][1]["text"]  # busy -> ephemeral
+    SA.handle_action(e, sl, body("kolo_spin"), pnl=p); assert "Kolo je obsazené: čeká se na potvrzení" in sl.calls[-1][1]["text"]  # busy -> ephemeral
     SA.handle_action(e, sl, body("kolo_confirm"), pnl=p); v = sl.calls[-1][1]["view"]
     assert sl.names()[-1] == "views_open" and r["spin"]["code"] in T(v)
     SA.handle_action(e, sl, body("kolo_command"), post=lambda k, o: posted.append(k), pnl=p)

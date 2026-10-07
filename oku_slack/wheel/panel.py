@@ -11,7 +11,7 @@ DRUMS_S, SPIN_END_S, ALMOST_END_S = 1.2, 4.7, 6.2
 SOFT = {"not_in_channel", "channel_not_found", "missing_scope", "ratelimited", "is_archived", "restricted_action"}
 HOST_NAMES = {"babis": "Andrej Babiš", "alenka": "Alenka Hranolka", "bourak": "Filip Bourák Turek", "marty": "Marty Prchal",
               "peta": "Peťa Maci", "kalousek": "Kalousek", "monika": "Monika Babišová"}
-STATE_CZ = {"pending": "čeká na potvrzení", "ready": "všichni potvrdili", "live": "🔴 běží", "done": "skončila", "expired": "💤 propadla"}
+STATE_CZ = {"pending": "⏳ čeká na potvrzení", "ready": "✅ připraveno", "live": "🔴 běží", "done": "🏁 skončeno", "expired": "💤 propadlo"}
 
 def _err(e):
     r = getattr(e, "response", None)

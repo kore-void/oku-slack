@@ -45,11 +45,26 @@ def handle_command(eng, user_id, text):
             return {"text": f"⚡ *{q['label']}* spuštěno na 2 minuty.", "seq": q, "open_modal": False}
         if arg in ("stav", "status"):
             e = eng.active_event(); cd = eng.cooldown_left(p)
-            ev = f"*{e['title']}* ({e['state']}) v {_hm(e['start_at'])}, potvrdili: {', '.join(e['confirmed']) or 'nikdo'}" if e else "žádná událost"
-            return {"text": f"{ev} · tvůj příkaz: {'připraven' if cd <= 0 else f'za {int(cd // 60)} min'}", "open_modal": False}
+            return {"text": status_text(eng, p, e, cd), "open_modal": False}
         return {"text": HELP.format(url=room_url()), "open_modal": False}
     except engine.WheelError as err:
         return {"text": f"✋ {err}", "open_modal": False}
+
+STATE_HUMAN = {"pending": "⏳ čeká na potvrzení", "ready": "✅ připraveno", "live": "🔴 běží",
+               "done": "🏁 skončeno", "expired": "💤 propadlo"}
+
+def status_text(eng, p, e, cd):
+    name = lambda k: eng.cfg["players"].get(k, {}).get("name", k)
+    cmd = "⚡ Tvůj nabitý příkaz: " + ("připraven" if cd <= 0 else f"nabije se za {max(1, int(cd // 60))} min")
+    if not e:
+        return "🎡 *Stav kola*\nKolo je volné – můžeš točit.\n" + cmd
+    lines = [f"🎡 *Stav kola:* {STATE_HUMAN.get(e['state'], e['state'])}", f"*{e['title']}* · start v {_hm(e['start_at'])}"]
+    if e["state"] == "pending":
+        ok = ", ".join(name(x) for x in e["confirmed"]) or "zatím nikdo"
+        lines.append(f"Potvrdili: {ok} · čeká se na: {', '.join(name(x) for x in eng.missing(e))}")
+    lines.append(eng.busy_reason(e) if e["state"] in ("pending", "ready", "live") else "Kolo je volné.")
+    lines.append(cmd)
+    return "\n".join(lines)
 
 def modal_view(e):
     return {"type": "modal", "callback_id": MODAL_ID, "private_metadata": e["id"],

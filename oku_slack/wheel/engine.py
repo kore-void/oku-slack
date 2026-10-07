@@ -45,6 +45,17 @@ class Engine:
         e["host_say"] = {"kind": kind, "text": text, "at": self.clock(), "name": self.cfg.get("host", {}).get("name", "")}
         return text
 
+    def busy_reason(self, e):
+        """Czech, human explanation why the wheel is blocked and when it frees up."""
+        hm = lambda t: time.strftime("%H:%M", time.localtime(t))
+        if e["state"] == "pending":
+            names = [self.cfg["players"].get(p, {}).get("name", p) for p in self.missing(e)]
+            return f"Kolo je obsazené: čeká se na potvrzení ({', '.join(names)}) do {hm(e['start_at'] + self.s['confirm_wait_s'])}."
+        if e["state"] == "ready":
+            return f"Kolo je obsazené: *{e['title']}* začíná v {hm(e['start_at'])}."
+        end = e.get("end_at")
+        return f"Kolo je obsazené: právě běží *{e['title']}*" + (f" do {hm(end)}." if end else ".")
+
     def missing(self, e):
         return [p for p in self.players() if p not in e["confirmed"]]
 
@@ -59,7 +70,8 @@ class Engine:
 
     def spin(self, by, lead_s=None, force=None):
         self._player(by)
-        if self.active_event(): raise WheelError("event_active", "Už běží jiná událost.")
+        a = self.active_event()
+        if a: raise WheelError("event_active", self.busy_reason(a))
         evs = self.cfg["events"]
         idx = self.pick(force)
         n = len(evs); seg = 360.0 / n

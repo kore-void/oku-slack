@@ -1,5 +1,6 @@
 """Wheel renderer: SVG (for docs/room fallback) and PNG via Pillow (Slack can't animate; it gets a still image).
 Geometry matches the room: pointer at top, segment i clockwise from 0 deg, wheel rotated by -target_angle."""
+import re
 import io, math
 from PIL import Image, ImageDraw, ImageFont
 
@@ -253,6 +254,21 @@ def _wrap(d, text, font, maxw):
         else: cur = t
     return lines + ([cur] if cur else [])
 
+def safe_text(text, font):
+    """Drop characters the font cannot render (would show as tofu/stray marks)."""
+    try:
+        from fontTools.ttLib import TTFont  # optional
+    except ImportError:
+        TTFont = None
+    out = []
+    for ch in str(text or ""):
+        if ch.isspace() or ch.isalnum() or ch in ".,:;!?-–'\"()&/+%#@":
+            try:
+                if font.getmask(ch).getbbox() is None and not ch.isspace(): continue
+            except Exception: continue
+            out.append(ch)
+    return re.sub(r"\s+", " ", "".join(out)).strip()
+
 def result_card(title, host_name="", start_text="", color="#1d4f91", avatar_path=None, size=(800, 450), k=2, seed=7):
     """Result card for the Slack panel: stage background, gold frame, confetti, big event title, host and start.
     The host is shown only via an existing repo avatar asset (assets/avatars) or a neutral silhouette."""
@@ -261,9 +277,11 @@ def result_card(title, host_name="", start_text="", color="#1d4f91", avatar_path
     img = _radial(max(W, H), _mix(_rgb(color), (60, 30, 90), 0.5), (6, 4, 12), power=0.7).crop((0, 0, W, H)).convert("RGBA")
     glow = Image.new("L", (W, H), 0); ImageDraw.Draw(glow).ellipse([W * 0.15, -H * 0.4, W * 0.85, H * 0.7], fill=110)
     img.alpha_composite(Image.merge("RGBA", (*Image.new("RGB", (W, H), (255, 220, 150)).split(), _blur(glow, W / 18))))
+    title = safe_text(title, _font(58 * k)); host_name = safe_text(host_name, _font(28 * k)); start_text = safe_text(start_text, _font(24 * k))
     d = ImageDraw.Draw(img); rnd = _r.Random(seed)
-    for _ in range(140):  # confetti
+    for _ in range(140):  # confetti, kept out of the text band so nothing reads as a stray glyph
         x, y, s = rnd.uniform(0, W), rnd.uniform(0, H), rnd.uniform(6, 16) * k / 2
+        if 0.12 * W < x < 0.88 * W and 0.08 * H < y < 0.92 * H: continue
         c = rnd.choice([(255, 214, 102), (215, 25, 40), (255, 255, 255), (17, 69, 126), (46, 204, 113)])
         a = rnd.uniform(0, 3.14)
         pts = [(x + s * math.cos(a + t), y + s * 0.5 * math.sin(a + t)) for t in (0, 1.6, 3.14, 4.7)]
