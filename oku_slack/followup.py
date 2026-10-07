@@ -48,7 +48,10 @@ class Followup:
                 if t >= self.stop_at: s["done"] = "expired_before_start"; self._save(); return False
                 s["status_ts"] = "pending"; self._save()  # never double-post, even if the call below crashes
                 try: s["status_ts"] = self.c.chat_postMessage(channel=self.ch, text=LINES[0])["ts"]
-                except Exception as e: log.warning("followup status post failed: %s", type(e).__name__)
+                except Exception as e:
+                    s["fails"] = s.get("fails", 0) + 1
+                    if s["fails"] < 3: s["status_ts"] = None  # nothing was posted: retry next tick
+                    log.warning("followup status post failed: %s %s", type(e).__name__, getattr(getattr(e, "response", None), "data", {}).get("error") if hasattr(e, "response") else e)
                 s["last_edit"] = t; s["idx"] = 1; self._save()
             for i, r in enumerate(self.reminders):
                 due = self.anchor + r["at_min"] * 60
