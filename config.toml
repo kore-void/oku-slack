@@ -74,3 +74,11 @@ user = "U0C75FSEK2M"
 anchor_ts = "1791365300.705149"
 interval_s = 120
 hard_stop_min = 45
+
+# Babiš invites/kicks members of allowed private channels on command from owner only
+# ("@Andrej_Bures vyhoď @X", "Andreji, pozvi X"). Needs bot scope groups:write (manifests/babis.yaml).
+# Never kicks owner or the bot itself; other users' commands are refused (mention) or ignored (no mention).
+[moderation]
+enabled = true
+allowed_channels = ["C0C76PTMJ9Z"]  # čapák
+owner_user_id = "U0C6XAN3EG3"       # Kore

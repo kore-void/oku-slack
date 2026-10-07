@@ -3,7 +3,7 @@ Tokens per persona from env: SLACK_OKU_<KEY>_BOT_TOKEN / SLACK_OKU_<KEY>_APP_TOK
 (babis falls back to SLACK_OKU_BOT_TOKEN / SLACK_OKU_APP_TOKEN). Gemini keys via env or
 OKU_GEMINI_ENV_FILE. Secrets are never logged; only variable names / present-missing."""
 import os, sys, logging, threading
-from . import core, meeting, usage, followup
+from . import core, meeting, usage, followup, moderation
 
 FALLBACK = "Technika selhala. To je kampaň!"
 
@@ -58,6 +58,7 @@ class Bridge:
 
     def handle(self, event):
         if ignored(event, self.bot): return
+        if self.persona == "babis" and self.moderate(event): return
         ch, ts = event["channel"], event.get("thread_ts") or event["ts"]
         text = (event.get("text") or "").replace(f"<@{self.bot}>", "")
         blame = self.cfg.get("blame_followup", False) and self.persona == "babis" and core.is_blame(self.cfg, text)
@@ -75,6 +76,11 @@ class Bridge:
             try: k = self.gen(core.build_prompt(self.cfg["personas"]["kalousek"]), hist + [{"role": "user", "content": reply}])
             except Exception as e: core.log.error("llm error: %s", type(e).__name__); k = meeting.KALOUSEK_FALLBACK
             self.post(ch, ts, k)
+
+    def moderate(self, event):
+        """[moderation] invite/kick in allowed private channels (owner only). Never breaks normal replies."""
+        try: return moderation.handle(self.client, self.cfg, self.bot, event)
+        except Exception as e: core.log.warning("moderation failed: %s", type(e).__name__); return False
 
     def report(self):
         try:
@@ -102,7 +108,11 @@ def register(app, b):
         if f is not None:
             try: f.on_message(event)
             except Exception as e: core.log.warning("followup on_message failed: %s", type(e).__name__)
-        if event.get("channel_type") == "im" and not ignored(event, b.bot): spawn(event)
+        if event.get("channel_type") == "im" and not ignored(event, b.bot): spawn(event); return
+        # "Andreji, vyhoď X" without @mention (mentions go via app_mention); owner only, others silently ignored
+        if b.persona == "babis" and not ignored(event, b.bot) and f"<@{b.bot}>" not in (event.get("text") or ""):
+            s = moderation.settings(b.cfg)
+            if s and event.get("user") == s["owner"]: b.moderate(event)
 
 def start_all(cfg, env=None, app_factory=None, handler_factory=None):
     """Start one Socket Mode app per persona with tokens. Returns {key: bridge}."""
