@@ -5,7 +5,12 @@ history_limit = 20
 icon_base_url = ""
 
 [channel_defaults]
-# "C0123456789" = "alenka"
+"C0C6W8E6NP9" = "babis"    # oku-porada
+"C0C75CZ2UCT" = "babis"    # oku-dotace-desk
+"C0C7BF296P4" = "alenka"   # oku-kantyna
+"C0C76ATANTX" = "marty"    # oku-socky
+"C0C75CZPRUK" = "peta"     # oku-disko
+"C0C76ATGLAH" = "kalousek" # oku-vina
 
 [personas.babis]
 name = "Andrej Babiš (parodie)"
