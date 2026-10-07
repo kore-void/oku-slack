@@ -60,9 +60,10 @@ class SceneRunner:
 
     # ---------- generation ----------
     def line(self, persona, cue, fallback, premise="", transcript=(), top=False):
-        if not (self.gen and self.prompt_fn and self.eng.s.get("scene_llm", True)) or persona in ("monika", "macinka"):
+        if not (self.gen and self.prompt_fn and self.eng.s.get("scene_llm", True)) or persona == "monika":
             return fallback, "template"
-        try: system = self.prompt_fn(persona)
+        from .personas import ALIAS
+        try: system = self.prompt_fn(ALIAS.get(persona, persona))
         except Exception as ex: log.warning("persona prompt %s: %s", persona, type(ex).__name__); return fallback, "template"
         if not system: return fallback, "template"
         seq = [q for q in self.eng.store.sequences() if q["state"] == "running"]

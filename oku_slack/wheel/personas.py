@@ -11,6 +11,9 @@ log = logging.getLogger("oku_wheel.personas")
 NAMES = {"babis": "Andrej Babiš", "alenka": "Alenka Hranolka", "bourak": "Filip Bourák Turek", "marty": "Marty Prchal",
          "peta": "Peťa Maci", "kalousek": "Kalousek", "monika": "Monika Babišová", "macinka": "Petr Macinka"}
 BOTS = ("babis", "alenka", "bourak", "marty", "peta", "kalousek")
+# Characters without their own app that speak through a persona bot (config.toml: peta has alias "macinka").
+# The fallback narration still uses the character's own name.
+ALIAS = {"macinka": "peta"}
 
 def token_names(k):
     return ["SLACK_OKU_BABIS_BOT_TOKEN", "SLACK_OKU_BOT_TOKEN"] if k == "babis" else [f"SLACK_OKU_{k.upper()}_BOT_TOKEN"]
@@ -33,6 +36,7 @@ class PersonaPoster:
         self.clients, self.disabled = {}, set()
 
     def client(self, k):
+        k = ALIAS.get(k, k)
         if k not in BOTS or k in self.disabled: return None
         if k not in self.clients:
             tok = next((t for t in (self.token_fn(n) for n in token_names(k)) if t), None)
@@ -56,12 +60,12 @@ class PersonaPoster:
                 return r["ts"], "persona"
             except Exception as e:
                 code = _err(e); log.warning("persona %s post failed: %s (wheel bot narrates)", k, code)
-                if code in ("invalid_auth", "account_inactive", "token_revoked", "not_in_channel", "channel_not_found"): self.disabled.add(k)
+                if code in ("invalid_auth", "account_inactive", "token_revoked", "not_in_channel", "channel_not_found"): self.disabled.add(ALIAS.get(k, k))
         name = NAMES.get(k, k)
         kw = {"channel": self.channel, "thread_ts": thread_ts, "unfurl_links": False, "unfurl_media": False}
         if self.customize:
             kw.update(text=text, username=name)
-            if self.icon_base and k in BOTS: kw["icon_url"] = f"{self.icon_base.rstrip('/')}/{k}.png"
+            if self.icon_base and ALIAS.get(k, k) in BOTS: kw["icon_url"] = f"{self.icon_base.rstrip('/')}/{ALIAS.get(k, k)}.png"
             how = "customize"
         elif k == "monika":
             kw["text"] = f"🎠 *Monika Babišová:* {text}"; how = "narrated"

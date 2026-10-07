@@ -217,6 +217,27 @@ def granted_scopes(client):
     except Exception as e:
         log.warning("auth.test failed: %s", _code(e)); return set()
 
+def refresh_scopes(client, known, scn=None):
+    """Re-read granted scopes (after the app is reinstalled with new ones) and apply them live:
+    chat:write.customize -> wheel-bot name override. Reaction events need no restart: the handlers are always
+    registered and Slack starts delivering them over the existing Socket Mode connection once subscribed."""
+    now = granted_scopes(client)
+    if not now: return known
+    added, removed = now - known, known - now
+    if added or removed: log.info("scopes changed: +%s -%s", ",".join(sorted(added)) or "-", ",".join(sorted(removed)) or "-")
+    if scn is not None and getattr(scn, "poster", None) is not None: scn.poster.customize = "chat:write.customize" in now
+    return now
+
+def watch_scopes(client, scopes, scn, every=300.0):
+    import threading
+    def loop():
+        known = set(scopes)
+        while True:
+            time.sleep(every)
+            try: known = refresh_scopes(client, known, scn)
+            except Exception as e: log.warning("scope refresh failed: %s", type(e).__name__)
+    threading.Thread(target=loop, daemon=True, name="kolo-scopes").start()
+
 def make_scenes(eng, wheel_client, channel, scopes):
     """Persona poster (solo persona bot tokens, Web API only) + scene runner with the bridge's LLM path."""
     from .. import core
@@ -248,6 +269,7 @@ def start(eng):
     try: scn = make_scenes(eng, app.client, channel, scopes)
     except Exception as e: log.error("scenes disabled: %s", type(e).__name__); scn = None
     post = make_poster(eng, app.client, channel, sync, pnl, scn)
+    watch_scopes(app.client, scopes, scn)
     a = eng.active_event()
     if scn is not None and a and a["state"] == "live": scn.start(a)  # resume after restart
 

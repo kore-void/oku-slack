@@ -220,8 +220,11 @@ def test_titanic_fixed_script_with_bourak_and_macinka_narration():
     beats = scenes.plan(e.cfg, ev); ps = {b["persona"] for b in beats}
     assert {"bourak", "macinka", "monika"} <= ps and all(b.get("text") for b in beats)
     wheel = FakeSlack(); pp = personas.PersonaPoster(wheel, "C1", token_fn=lambda n: None)
-    ts, how = pp.post("macinka", "Filipe, jednací řád tohle nedovoluje."); assert how == "narrated"
+    ts, how = pp.post("macinka", "Filipe, jednací řád tohle nedovoluje."); assert how == "narrated"   # no Peťa token -> Monika
     assert "Petr Macinka na to" in wheel.posts()[-1]["text"] and "username" not in wheel.posts()[-1]
+    peta = FakeSlack(); pp3 = personas.PersonaPoster(wheel, "C1", token_fn={"SLACK_OKU_PETA_BOT_TOKEN": "xoxb-p"}.get, client_factory=lambda token: peta)
+    ts, how = pp3.post("macinka", "Filipe, jednací řád tohle nedovoluje."); assert how == "persona"   # via the Peťa bot
+    assert peta.posts()[-1]["text"] == "Filipe, jednací řád tohle nedovoluje."
     pp2 = personas.PersonaPoster(wheel, "C1", token_fn=lambda n: None, customize=True)
     pp2.post("macinka", "Ahoj"); assert wheel.posts()[-1]["username"] == "Petr Macinka" and wheel.posts()[-1]["text"] == "Ahoj"
     calls = []
@@ -287,3 +290,16 @@ def test_scopes_header_and_manifest():
     assert SA.granted_scopes(C()) == {"commands", "chat:write", "reactions:read"}
     m = (pathlib.Path(__file__).parents[1] / "manifests" / "kolo.yaml").read_text(encoding="utf-8")
     for need in ("reactions:read", "chat:write.customize", "reaction_added", "reaction_removed"): assert need in m
+
+def test_scope_refresh_applies_customize_live_and_reaction_handlers_registered():
+    class R(dict):
+        def __init__(self, sc): super().__init__(user_id="U1"); self.headers = {"x-oauth-scopes": sc}
+    class C:
+        sc = "commands,chat:write"
+        def auth_test(self): return R(self.sc)
+    c = C(); poster = personas.PersonaPoster(FakeSlack(), "C1"); scn = type("S", (), {"poster": poster})()
+    known = SA.refresh_scopes(c, set(), scn); assert not poster.customize
+    c.sc = "commands,chat:write,reactions:read,chat:write.customize"
+    known = SA.refresh_scopes(c, known, scn); assert poster.customize and "reactions:read" in known
+    src = (pathlib.Path(__file__).parents[1] / "oku_slack" / "wheel" / "slack_adapter.py").read_text(encoding="utf-8")
+    assert '@app.event("reaction_added")' in src and '@app.event("reaction_removed")' in src

@@ -141,11 +141,11 @@ The 2-min sequence narrates the effects live in the panel (`Sekvence` field).
 - On `live`, `SceneRunner` posts the scene: the first beat is a short top-level line in the wheel channel, the rest go into its thread.
 - Each line: persona prompt via `oku_slack.core.build_prompt` (same persona files as the bridge) + `core.generate` (Gemini; env `LLM_BACKEND`, `OKU_GEMINI_ENV_FILE` like the bridge's Heimdall service).
   Transcript so far + any running charged sequence go into the prompt. Error, empty answer, or more than `scene_llm_timeout_s` -> the beat's templated `fallback`.
-- Titanic legend: fixed script lines; `turek` -> Bourák bot, `marty` -> Marty bot, `monika` and `macinka` -> wheel bot (with `username` override if `chat:write.customize` is granted, else narrated by Monika).
+- Titanic legend: fixed script lines; `turek` -> Bourák bot, `marty` -> Marty bot, `macinka` -> Peťa bot (`SLACK_OKU_PETA_BOT_TOKEN`; config.toml alias), `monika` -> wheel bot. Without a persona token the wheel bot posts the line (`username` override if `chat:write.customize` is granted, else narrated by Monika).
 - Loop safety: persona posts are bot messages; `oku_slack.bridge.ignored()` drops every event with `bot_id`/`subtype` (both `app_mention` and `message`), so the bridge never answers them and the meeting "porada" trigger never fires on them. Mentions (`<@…>`, `<!…>`) are stripped from generated lines.
 - Persona bots are already members of #oku-porada; a bot that is missing/refused degrades to wheel-bot narration.
 
 ### Slack app changes (A0C7EUMGZ98, manifests/kolo.yaml)
 - Bot scopes: `reactions:read` (hype meter), `chat:write.customize` (optional name override).
 - Event subscriptions (bot events): `reaction_added`, `reaction_removed`. Reinstall the app after the change.
-- Until granted: the hype meter stays at 0 and Macinka/Monika lines are narrated; everything else works. Granted scopes are read from the `x-oauth-scopes` header of `auth.test` at start.
+- Until granted: the hype meter stays at 0 and wheel-bot lines are narrated; everything else works. Granted scopes are read from the `x-oauth-scopes` header of `auth.test` at start and re-checked every 5 min (name override switches on live). Reaction handlers are always registered, so events flow over the existing Socket Mode connection as soon as the app is reinstalled with the subscription; no code change or restart is needed (restart only to log the new scopes immediately).
