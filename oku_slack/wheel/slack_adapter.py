@@ -2,12 +2,12 @@
 Uses a DEDICATED app (env SLACK_OKU_WHEEL_BOT_TOKEN / SLACK_OKU_WHEEL_APP_TOKEN, manifests/kolo.yaml) so a second
 Socket Mode connection never steals events from the live persona bridge. Tokens are read from env, never logged."""
 import logging, os, time
-from . import canvas, engine, render
+from . import canvas, engine, panel, render
 
 log = logging.getLogger("oku_wheel.slack")
 MODAL_ID = "kolo_confirm"
 HOSTS = {"monika": "Monika Babišová", "babis": "Andrej Babiš", "alenka": "Alenka", "bourak": "Bourák", "marty": "Marty", "peta": "Peťa", "kalousek": "Kalousek"}
-HELP = ("*/kolo* roztočí kolo (*/kolo toc <klíč>* vynutí událost, pokud allow_force) · */kolo potvrdit* (modál s kódem) · */kolo prikaz* nabitý příkaz (1× za 30 min) · "
+HELP = ("*/kolo* pošle ovládací panel · */kolo toc* roztočí kolo (*/kolo toc <klíč>* vynutí událost, pokud allow_force) · */kolo potvrdit* (modál s kódem) · */kolo prikaz* nabitý příkaz (1× za 30 min) · "
         "*/kolo stav* · animace a chat v roomce: {url}")
 
 def env_token(name):
@@ -31,7 +31,9 @@ def handle_command(eng, user_id, text):
     arg = (text or "").strip().lower()
     try:
         parts = arg.split()
-        if not parts or parts[0] in ("toc", "toč", "spin"):
+        if not parts or parts[0] == "panel":
+            return {"text": "Ovládací panel kola posílám do kanálu.", "panel": True, "open_modal": False}
+        if parts[0] in ("toc", "toč", "spin"):
             e = eng.spin(p, force=parts[1] if len(parts) > 1 else None)
             return {"text": f"Kolo se točí → *{e['title']}* v {_hm(e['start_at'])}. Tvůj kód: `{e['code']}` (/kolo potvrdit).",
                     "spin": e, "open_modal": False}
@@ -93,11 +95,12 @@ def _permalink(resp):
     f = (resp.get("file") if hasattr(resp, "get") else None) or ((resp.get("files") or [{}])[0] if hasattr(resp, "get") else {})
     return (f or {}).get("permalink") or (f or {}).get("url_private")
 
-def make_poster(eng, client, channel, sync=None):
+def make_poster(eng, client, channel, sync=None, pnl=None):
     """notify(kind, obj): channel messages + spin GIF in thread + result PNG embedded in the live canvas.
     Every Slack error is logged by code (missing_scope, not_in_channel, ...) and swallowed."""
     def post(kind, obj):
         if sync: sync.request()
+        if pnl: pnl.request()
         text = notification(eng, kind, obj)
         if not (text and channel): return
         segs = eng.snapshot()["wheel"]
@@ -119,6 +122,26 @@ def make_poster(eng, client, channel, sync=None):
             log.warning("slack post %s failed: %s", kind, _code(e))
     return post
 
+def handle_action(eng, client, body, post=None, pnl=None):
+    """Button press on the panel. Replies ephemerally; confirmation opens the code modal."""
+    act = (body.get("actions") or [{}])[0].get("action_id")
+    user = (body.get("user") or {}).get("id"); ch = (body.get("channel") or {}).get("id") or (pnl.channel if pnl else None)
+    arg = panel.ACTIONS.get(act)
+    if not arg: return None
+    r = handle_command(eng, user, arg)
+    try:
+        if r.get("open_modal"):
+            client.views_open(trigger_id=body["trigger_id"], view=modal_view(eng.active_event()))
+        elif r.get("text") and ch:
+            client.chat_postEphemeral(channel=ch, user=user, text=r["text"])
+    except Exception as e:
+        log.warning("action %s reply failed: %s", act, _code(e))
+    if post:
+        if r.get("spin"): post("spin", r["spin"])
+        if r.get("seq"): post("seq_start", r["seq"])
+    if pnl: pnl.request()
+    return r
+
 def start(eng):
     """Connect the dedicated Kolo app over Socket Mode. Returns notify(kind, obj) for the room server."""
     from slack_bolt import App
@@ -128,7 +151,13 @@ def start(eng):
     app = App(token=bot); channel = eng.cfg["settings"].get("slack_channel")
 
     sync = canvas.CanvasSync(eng, app.client, channel, eng.store); sync.run()
-    post = make_poster(eng, app.client, channel, sync)
+    pnl = panel.Panel(eng, app.client, channel, eng.store); pnl.run()
+    post = make_poster(eng, app.client, channel, sync, pnl)
+
+    import re as _re
+    @app.action(_re.compile(r"^kolo_(spin|confirm|command|status)$"))
+    def _act(ack, body, client):
+        ack(); handle_action(eng, client, body, post, pnl)
 
     @app.command("/kolo")
     def _kolo(ack, body, client):
@@ -136,6 +165,10 @@ def start(eng):
         if r["open_modal"]:
             ack(); client.views_open(trigger_id=body["trigger_id"], view=modal_view(eng.active_event())); return
         ack(text=r["text"])
+        if r.get("panel"):
+            if not pnl.post_new(): client.chat_postEphemeral(channel=body["channel_id"], user=body["user_id"],
+                                                             text=f"Panel nejde poslat: {pnl.last_error} (je bot v kanálu?)")
+            return
         for k in ("spin", "seq"):
             if r.get(k): post("spin" if k == "spin" else "seq_start", r[k])
 
@@ -144,7 +177,7 @@ def start(eng):
         code = view["state"]["values"]["code"]["v"]["value"]
         errs = handle_modal(eng, body["user"]["id"], view["private_metadata"], code)
         ack(response_action="errors", errors=errs) if errs else ack()
-        if not errs: post("confirm", {})
+        if not errs: post("confirm", {}); pnl.request()
 
     SocketModeHandler(app, apptok).connect()
     log.info("Slack adapter connected")

@@ -96,7 +96,8 @@ def test_render_png_and_svg():
 def test_slack_command_flow(env):
     e, _ = env
     assert "Nejsi" in SA.handle_command(e, "UNOBODY", "")["text"]
-    r = SA.handle_command(e, "U0C6XAN3EG3", ""); ev = r["spin"]; assert ev["code"] in r["text"]
+    assert SA.handle_command(e, "U0C6XAN3EG3", "")["panel"]
+    r = SA.handle_command(e, "U0C6XAN3EG3", "toc"); ev = r["spin"]; assert ev["code"] in r["text"]
     assert SA.handle_command(e, "U0C6XAN3EG3", "potvrdit")["open_modal"]
     assert SA.handle_modal(e, "U0C6XAN3EG3", ev["id"], "nope") == {"code": "Špatný kód."}
     assert SA.handle_modal(e, "U0C6XAN3EG3", ev["id"], ev["code"]) is None

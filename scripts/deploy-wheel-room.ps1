@@ -21,7 +21,7 @@ New-Item -ItemType Directory -Force "$dist\img" | Out-Null
 Copy-Item "$repo\oku_slack\wheel\static\room.html" "$dist\index.html"
 [IO.File]::WriteAllText("$dist\config.js", "window.OKU_WS_URL = `"$WsUrl`";`n", (New-Object Text.UTF8Encoding $false))
 $py = "$repo\.venv-wheel\Scripts\python.exe"
-& $py -c "from oku_slack.wheel import config,render; c=config.load(); s=[{'key':x['key'],'color':x['color']} for x in c['events']]; open(r'$dist\img\kolo.png','wb').write(render.png(s,0)); open(r'$dist\img\titanic.png','wb').write(render.titanic_poster(c['scripts']['titanic']))"
+& $py -c "from oku_slack.wheel import config,render; c=config.load(); s=[{'key':x['key'],'color':x['color'],'title':x['title']} for x in c['events']]; print(len(render.render_assets(r'$dist\img', s, c['scripts']['titanic'])), 'images')"
 Write-Host "WS: $WsUrl"
 Push-Location C:\code\umbra
 try { node tools\_upload_umbra_resilient.js $dist $Remote } finally { Pop-Location }

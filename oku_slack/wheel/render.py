@@ -228,3 +228,18 @@ def svg(segments, angle=0.0, size=512):
     out.append('</g>')
     out.append(f'<polygon points="{c - 16},4 {c + 16},4 {c},40" fill="#d71928" stroke="#ffd666" stroke-width="2"/></svg>')
     return "".join(out)
+
+def render_assets(out_dir, segments, script=None):
+    """Static images for the Slack panel (hosted on itzkore.cz/oku/kolo/img/): idle wheel, per-event
+    result PNG and spin GIF landing in the segment centre, Titanic poster."""
+    import pathlib
+    out = pathlib.Path(out_dir); out.mkdir(parents=True, exist_ok=True)
+    (out / "kolo.png").write_bytes(png(segments, 0))
+    n = len(segments)
+    for i, s in enumerate(segments):
+        a = (i + 0.5) * 360 / n
+        title = s.get("title") or label_of(s)
+        (out / f"kolo-{s['key']}.png").write_bytes(png(segments, a, title=title))
+        (out / f"kolo-spin-{s['key']}.gif").write_bytes(spin_gif(segments, a, title=title))
+    (out / "titanic.png").write_bytes(titanic_poster(script))
+    return sorted(p.name for p in out.iterdir())
