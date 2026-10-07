@@ -1,59 +1,72 @@
-# Procedure for Claude: OKÚ "solo bots" (one Slack app per persona)
+# OKÚ "solo bots" (one Slack app per persona)
 
 ## Goal
-Today one Slack app (bot user `andrej_babis`, tokens `SLACK_OKU_BOT_TOKEN` / `SLACK_OKU_APP_TOKEN`) posts as all 6 personas through `chat:write.customize` (username/icon override). Kore has decided on **solo bots**: each persona gets its own Slack app / workspace member and answers only as itself.
+Originally one Slack app (bot user `andrej_babis`, tokens `SLACK_OKU_BOT_TOKEN` / `SLACK_OKU_APP_TOKEN`) posted as all 6 personas through `chat:write.customize` (username/icon override), and a per-channel default picked the speaker (so `@Babiš` in #oku-socky answered as Marty). Kore decided on **solo bots**: each persona is its own Slack app / workspace member and answers only as itself. Babiš keeps the existing app and tokens.
 
 Personas (config key → display name): `babis` Andrej Babiš, `alenka` Alenka Hranolka, `bourak` Filip „Bourák“ Turek, `marty` Marty Prchal, `peta` Peťa Maci, `kalousek` Kalousek.
 
-## Current architecture
-- `oku_slack/bridge.py`: `Bridge` class. `handle()` strips `<@bot>`, calls `core.route()` to pick a persona by alias, generates a reply, and posts it with `username` + `icon_url` (`post()`). If `core.is_blame()` matches, it also posts a Kalousek follow-up. `main()` builds one Bolt `App` with `SLACK_OKU_BOT_TOKEN`, registers `app_mention` and DM `message` handlers (skips `bot_id` and `subtype`), and starts one `SocketModeHandler` with `SLACK_OKU_APP_TOKEN`.
-- `oku_slack/core.py`: config loading, `build_prompt`, `route`, `is_blame`, `icon_url`, and the LLM backends (`gemini` is the default; it reads only the GEMINI_* names from `OKU_GEMINI_ENV_FILE`).
-- `config.toml`: personas, aliases, `channel_defaults`, `icon_base_url`, and Kalousek with `blame_only` + `blame_patterns`.
-- `slack-manifest.yaml`: the existing single-app manifest (includes `chat:write.customize`).
-- `tests/test_oku.py`: pytest coverage of routing, blame, prompts, handle/post, and the LLM backends.
-- Heimdall service `oku_slack`: `C:\code\heimdall\services.d\oku_slack.toml` runs `.venv\Scripts\python.exe -m oku_slack.bridge` in `C:\code\oku-slack`, which logs to `logs\oku_slack.log`.
-- `assets/avatars/<key>.png`: 512x512 avatars, ready to upload as app icons.
+## How it works now (implemented)
+- `oku_slack/bridge.py`
+  - `start(cfg)`: for each persona in `config.toml`, look up its tokens. A persona with a missing token is logged as `persona=<key> skipped: missing <VAR names>` and skipped. Otherwise it creates a Bolt `App`, runs `auth.test` for the bot user id, registers handlers, and connects a `SocketModeHandler` (non-blocking). Each persona starts inside its own try/except (`persona=<key> failed to start: BoltError(invalid_auth)` etc.), so one bad token doesn't stop the others. If two personas resolve to the same Slack bot user (the same xoxb pasted twice), the second one is skipped, so a mention never gets two answers.
+  - `main()`: if no persona connected, it logs an error and exits 1. Otherwise it logs `running personas=...` and blocks.
+  - `Bridge(client, cfg, key, bot_user)`: a fixed persona. `handle()` answers in the thread as that persona only, with a plain `chat.postMessage` (no username/icon override).
+  - `wants(event, bot_user)`, the loop guard used by both handlers (`app_mention`, DM `message`): ignore events with `bot_id`, any `subtype`, or `user == own bot user`. Personas never trigger each other. If a human mentions two personas in one message, each app answers once, as itself.
+  - History (threads): only this app's own messages are `assistant`. Messages from other bots become `user` content prefixed `[Name]`. Mentions of sibling personas (`<@U…>`) are rewritten to `@Name`.
+- `oku_slack/core.py`: `token_names(key)`, `tokens(key)` (Babiš falls back to the legacy names), and `env(name)`, which reads the process env and then, on Windows only, `HKCU\Environment`. That registry key is where `setx` writes, so a newly set token is picked up by restarting just the service, even when Heimdall itself was started before the `setx`. `route()`, `is_blame()`, `icon_url()`, `channel_defaults`, aliases and blame patterns are removed.
+- `config.toml`: personas only (`name` is used to label sibling personas in history, `avatar` is the icon file to upload).
+- Kalousek: his app answers mentions and DMs like everyone else. His prompt ("silent sniper") still makes him reply with a terse `…` unless he is blamed. The old automatic "Kalousek follow-up when blamed" is gone, because his app doesn't receive channel messages that don't mention him.
 
-## Ready-made manifests
-`manifests/{babis,alenka,bourak,marty,peta,kalousek}.yaml`: Socket Mode on; bot events `app_mention`, `message.im`; scopes `app_mentions:read, chat:write, im:history, im:read, im:write, channels:history, groups:history, users:read` (`chat:write.customize` is dropped on purpose).
+## Manifests
+`manifests/{babis,alenka,bourak,marty,peta,kalousek}.yaml`: Socket Mode on; bot events `app_mention`, `message.im`; scopes `app_mentions:read, chat:write, im:history, im:read, im:write, channels:history, groups:history, users:read` (`chat:write.customize` is dropped on purpose). The Messages tab is enabled, so people can DM each bot. `slack-manifest.yaml` is the legacy single-app manifest (kept for reference only).
 
-## Implementation plan
-1. **Tokens.** Add a helper `tokens(key)` that returns `(os.environ.get(f"SLACK_OKU_{KEY}_BOT_TOKEN"), ..._APP_TOKEN)`, where KEY is the uppercased key. For `babis` only, fall back to `SLACK_OKU_BOT_TOKEN` / `SLACK_OKU_APP_TOKEN`. Never log the values. Log only the variable names or present/missing.
-2. **Per-persona bridge.** Give `Bridge` a fixed `persona` key. `handle()` answers as that persona only. Do not use `route()` to pick a different speaker, and drop `username`/`icon_url` from `post()`. Babiš's app → Babiš. Kalousek's app answers when mentioned or DMed (ignore `blame_only` for direct mentions). Drop the blame follow-up from Babiš's app, or keep it optional behind a config flag that stays off by default (Kalousek is now his own member). Keep `channel_defaults` only as documentation, or remove it.
-3. **History.** Mark a message as `assistant` only when `m.get("user") == own bot user id`. Other bots' messages become `user` content prefixed with their name/bot_id, so the personas can see each other in threads.
-4. **Loop guard.** In both handlers, ignore events with `bot_id`, `subtype` (bot_message, message_changed…), or `user == own bot id`. Personas must never trigger each other automatically.
-5. **Multi-app main().** For each persona in `config.toml`: if a token is missing, log `persona=<key> skipped: missing SLACK_OKU_<KEY>_BOT_TOKEN/APP_TOKEN` and continue. Otherwise create a Bolt `App(token=bot)`, run `auth_test()` for the user id, register the handlers, and start `SocketModeHandler(app, app_tok).connect()` (non-blocking), or run each `.start()` in its own daemon thread. Log `persona=<key> connected user=<id>`. Wrap each persona's startup in try/except so one bad token doesn't kill the others. If none connected, log an error and exit non-zero. Otherwise block forever (`threading.Event().wait()`).
-6. **Tests** (`tests/test_oku.py`): update `test_handle_posts_as_persona_with_kalousek` and `test_llm_failure_fallback_and_icon` to the new semantics (no username/icon, own persona only). Add tests for: token resolution, including the babis fallback; skipping a persona with missing tokens (monkeypatch env, fake App factory); the bot-loop guard (`bot_id`/`subtype`/own user ignored); and Kalousek answering a mention. Run `.venv\Scripts\python.exe -m pytest -q`. Everything must pass.
-7. Update `README.md` and the comment in `oku_slack.toml` with the new env var names. Mark `slack-manifest.yaml` as legacy.
-8. Commit and push to `kore-void/oku-slack` main.
-9. Run `heimdall restart oku_slack`, then check `logs\oku_slack.log`. Expect `persona=babis connected` and `skipped` lines for the personas without tokens. Confirm the process stays alive (`heimdall status oku_slack`).
-
-## Env vars Kore sets (user env, `setx`)
+## Env vars (user env, `setx`)
 ```
-SLACK_OKU_BABIS_BOT_TOKEN     SLACK_OKU_BABIS_APP_TOKEN     (optional; falls back to SLACK_OKU_BOT_TOKEN / SLACK_OKU_APP_TOKEN)
+SLACK_OKU_BABIS_BOT_TOKEN     SLACK_OKU_BABIS_APP_TOKEN     (optional; if both unset, Babiš uses SLACK_OKU_BOT_TOKEN / SLACK_OKU_APP_TOKEN)
 SLACK_OKU_ALENKA_BOT_TOKEN    SLACK_OKU_ALENKA_APP_TOKEN
 SLACK_OKU_BOURAK_BOT_TOKEN    SLACK_OKU_BOURAK_APP_TOKEN
 SLACK_OKU_MARTY_BOT_TOKEN     SLACK_OKU_MARTY_APP_TOKEN
 SLACK_OKU_PETA_BOT_TOKEN      SLACK_OKU_PETA_APP_TOKEN
 SLACK_OKU_KALOUSEK_BOT_TOKEN  SLACK_OKU_KALOUSEK_APP_TOKEN
 ```
-BOT = `xoxb-…` (OAuth & Permissions), APP = `xapp-…` (Basic Information → App-Level Token with `connections:write`).
+BOT = `xoxb-…` (OAuth & Permissions → Bot User OAuth Token), APP = `xapp-…` (Basic Information → App-Level Tokens, scope `connections:write`).
 
-## Kore's manual steps (per persona)
-1. Go to api.slack.com/apps → Create New App → From a manifest, and paste `manifests/<key>.yaml`.
-2. Basic Information → App icon: upload `assets/avatars/<key>.png` (512x512).
-3. Create an App-Level Token with scope `connections:write` (this gives the APP token).
-4. Install to the workspace, then copy the Bot User OAuth Token (this gives the BOT token).
-5. `setx SLACK_OKU_<KEY>_BOT_TOKEN ...` and `setx SLACK_OKU_<KEY>_APP_TOKEN ...`. Then restart Heimdall or the service so it picks up the new env.
-6. Invite the bot to its channels (`/invite @<name>`).
+## Kore's manual steps
+
+### 0. Deploy the code (Heimdall)
+`cd C:\code\oku-slack` → `git pull` (after the PR is merged) → `heimdall restart oku_slack`. No new dependencies. With only the legacy tokens set, the log shows `persona=babis connected` and 5 `skipped` lines. From then on every `@Babiš` mention is answered by Babiš. The other personas come back as their apps are added below.
+
+### 1. Babiš: keep the EXISTING app (do not create a new one)
+1. api.slack.com/apps → the existing app (the one whose tokens are `SLACK_OKU_BOT_TOKEN` / `SLACK_OKU_APP_TOKEN`) → **App Manifest** → replace the content with `manifests/babis.yaml` → Save. Slack asks you to reinstall, because `chat:write.customize` is removed: **Install App → Reinstall to Workspace**.
+2. Basic Information → Display Information → App icon: upload `assets/avatars/babis.png`.
+3. Tokens normally stay the same, so nothing to `setx`. If the reinstall shows a different Bot User OAuth Token, run `setx SLACK_OKU_BOT_TOKEN "xoxb-…"`, then restart Heimdall itself (see the note below).
+
+### 2. The other 5: alenka, bourak, marty, peta, kalousek (one by one, in any order)
+1. api.slack.com/apps → **Create New App → From a manifest** → pick the workspace → paste `manifests/<key>.yaml` → Create.
+2. Basic Information → Display Information → App icon: upload `assets/avatars/<key>.png` (512×512) → Save.
+3. Basic Information → **App-Level Tokens → Generate Token and Scopes**, add scope `connections:write` → Generate → copy the `xapp-…` token.
+4. **Install App → Install to Workspace** → Allow → copy the **Bot User OAuth Token** (`xoxb-…`).
+5. In a terminal on Heimdall:
+   ```
+   setx SLACK_OKU_<KEY>_BOT_TOKEN "xoxb-…"
+   setx SLACK_OKU_<KEY>_APP_TOKEN "xapp-…"
+   ```
+   (`<KEY>` = `ALENKA`, `BOURAK`, `MARTY`, `PETA`, `KALOUSEK`)
+6. `heimdall restart oku_slack`, then check `logs\oku_slack.log` for `persona=<key> connected user=U…`.
+7. In Slack, invite the new bot into its channels: `/invite @<name>` (e.g. Marty into #oku-socky).
+
+Note: `setx` only changes the user env for *new* processes. The service also reads missing tokens straight from `HKCU\Environment`, so a newly added persona needs only `heimdall restart oku_slack`. If you *change* a token that the running Heimdall already has in its env (e.g. a reissued `SLACK_OKU_BOT_TOKEN`), restart Heimdall itself from a new terminal, or sign out and back in, so the service doesn't inherit the stale value.
+
+## Verify (no posting needed)
+- `logs\oku_slack.log`: one `connected` line per persona that has tokens. Each missing persona logs `skipped: missing …` and each bad token logs `failed to start: …(invalid_auth)`. Process status: `heimdall status oku_slack`.
+- Tests: `.venv\Scripts\python.exe -m pytest -q`.
 
 ## Acceptance criteria
 - With only the legacy tokens set, the service starts, Babiš connects, and the other 5 are logged as skipped. No crash.
 - Each connected app answers mentions/DMs only as its own persona, with no username/icon override.
-- Bot messages never trigger replies (no loops between personas).
-- All tests pass, and the commit is pushed.
+- Bot messages never trigger replies (no loops between personas). The same token reused for two personas is refused.
 
 ## Rules
 - Never print, log, or commit secrets (tokens, Gemini keys). Mention env var names only.
 - No `Co-authored-by: Claude` (or any AI) trailer in commits.
 - Do not post to Slack while implementing or verifying. Verify through logs only.
+- The Heimdall service definition `C:\code\heimdall\services.d\oku_slack.toml` lives in the Heimdall repo. If its comment lists the env vars, update it there to the names above.

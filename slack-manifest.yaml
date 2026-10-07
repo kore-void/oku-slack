@@ -1,3 +1,5 @@
+# LEGACY: the original single "OKÚ" app that posted as every persona via chat:write.customize.
+# Not used anymore. Solo bots use manifests/<key>.yaml (see CLAUDE-SOLO-BOTS.md); the existing app becomes Babiš.
 display_information:
   name: OKÚ
   description: Satirický tým OKÚ (parodie). Nejde o skutečné osoby.

@@ -1,53 +1,38 @@
-# OKÚ Slack satire team. Secrets are NEVER here: SLACK_OKU_BOT_TOKEN, SLACK_OKU_APP_TOKEN, LLM_API_KEY come from env.
-default_persona = "babis"
+# OKÚ Slack satire team: solo bots, one Slack app per persona (see CLAUDE-SOLO-BOTS.md).
+# Secrets are NEVER here. Per persona [personas.<key>] the service reads SLACK_OKU_<KEY>_BOT_TOKEN / SLACK_OKU_<KEY>_APP_TOKEN
+# from env (Babiš falls back to SLACK_OKU_BOT_TOKEN / SLACK_OKU_APP_TOKEN); a persona without tokens is skipped.
+# Each app answers only its own @mentions/DMs as its own persona. Name/icon come from the Slack app (upload assets/avatars/<avatar>).
+# name = how the other personas see this one in thread history.
 history_limit = 20
-# icon_url must be a public https URL; empty = Slack app's default icon.
-icon_base_url = "https://raw.githubusercontent.com/kore-void/oku-slack/main/assets/avatars/"
-
-[channel_defaults]
-"C0C6W8E6NP9" = "babis"    # oku-porada
-"C0C75CZ2UCT" = "babis"    # oku-dotace-desk
-"C0C7BF296P4" = "alenka"   # oku-kantyna
-"C0C76ATANTX" = "marty"    # oku-socky
-"C0C75CZPRUK" = "peta"     # oku-disko
-"C0C76ATGLAH" = "kalousek" # oku-vina
 
 [personas.babis]
 name = "Andrej Babiš (parodie)"
 dir = "babis"
 files = ["COSPLAY-v3.1.md", "hlasky-canon.md"]
-aliases = ["babiš", "babis", "andrej", "andrej babiš", "agrofert"]
 avatar = "babis.png"
 
 [personas.alenka]
 name = "Alenka Hranolka (parodie)"
 dir = "alenka"
-aliases = ["alenka", "hranolka", "alenko"]
 avatar = "alenka.png"
 
 [personas.bourak]
 name = "Filip Bourák Turek (parodie)"
 dir = "bourak"
-aliases = ["bourák", "bourak", "turek", "filip", "filipe"]
 avatar = "bourak.png"
 
 [personas.marty]
 name = "Marty Prchal (parodie)"
 dir = "marty"
-aliases = ["marty", "prchal", "marty prchal"]
 avatar = "marty.png"
 
 [personas.peta]
 name = "Peťa Maci (parodie)"
 dir = "peta"
-aliases = ["peťa", "peta", "maci", "macinka", "peťo"]
 avatar = "peta.png"
 
 [personas.kalousek]
 name = "Kalousek (parodie)"
 dir = "kalousek"
-aliases = ["kalousek", "kalousku", "kalouska", "kalouskovi"]
 avatar = "kalousek.png"
-# Kalousek speaks only when blamed (see his prompt). Never default/routed normally.
-blame_only = true
-blame_patterns = ["za to může", "může za to", "může za", "kvůli kalousk", "vina kalousk", "kalousek za", "zavinil", "kalousek to"]
+# His prompt makes him speak only when blamed; a mention without blame gets a terse "…".

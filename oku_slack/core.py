@@ -1,5 +1,5 @@
-"""Pure logic: config, persona prompts, routing, LLM call. No Slack imports (unit-testable)."""
-import json, os, re, pathlib, tomllib, logging, requests
+"""Pure logic: config, persona prompts, Slack token lookup, LLM call. No Slack imports (unit-testable)."""
+import json, os, pathlib, tomllib, logging, requests
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 log = logging.getLogger("oku")
@@ -21,30 +21,30 @@ def build_prompt(p, persona_root=None):
     parts.append(PARODY)
     return "\n\n".join(parts)
 
-def _norm(s): return (s or "").lower()
+# --- Slack tokens: one Slack app per persona (solo bots) ---
+LEGACY_TOKENS = ("SLACK_OKU_BOT_TOKEN", "SLACK_OKU_APP_TOKEN")  # the original single app, now Babiš
+LEGACY_PERSONA = "babis"
 
-def _mentions(text, alias):
-    return re.search(r"(?<!\w)" + re.escape(alias) + r"(?!\w)", text) is not None
+def token_names(key):
+    k = key.upper(); return f"SLACK_OKU_{k}_BOT_TOKEN", f"SLACK_OKU_{k}_APP_TOKEN"
 
-def is_blame(cfg, text):
-    t = _norm(text); k = cfg["personas"].get("kalousek")
-    if not k or not any(_mentions(t, a) for a in k["aliases"]): return False
-    return any(b in t for b in k.get("blame_patterns", []))
+def _user_env(name):
+    """Windows: `setx` writes HKCU\\Environment, which already-running processes (Heimdall) don't see. Read it directly."""
+    if os.name != "nt": return None
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as k: return winreg.QueryValueEx(k, name)[0] or None
+    except OSError: return None
 
-def route(cfg, text, channel=None):
-    """Return (persona_key, kalousek_followup: bool)."""
-    t = _norm(text); best = None
-    for key, p in cfg["personas"].items():
-        if p.get("blame_only"): continue
-        for a in p["aliases"]:
-            m = re.search(r"(?<!\w)" + re.escape(a) + r"(?!\w)", t)
-            if m and (best is None or m.start() < best[0]): best = (m.start(), key)
-    key = best[1] if best else cfg.get("channel_defaults", {}).get(channel) or cfg["default_persona"]
-    return key, is_blame(cfg, text)
+def env(name, user_env=_user_env):
+    return os.environ.get(name) or user_env(name)
 
-def icon_url(cfg, p):
-    base = cfg.get("icon_base_url", "").strip()
-    return f"{base.rstrip('/')}/{p['avatar']}" if base and p.get("avatar") else None
+def tokens(key, get=env):
+    """Return (bot_token, app_token, (bot_name, app_name)). Babiš falls back to the legacy names. Never log the values."""
+    names = token_names(key); bot, app = get(names[0]), get(names[1])
+    if key == LEGACY_PERSONA and not bot and not app:
+        names = LEGACY_TOKENS; bot, app = get(names[0]), get(names[1])
+    return bot, app, names
 
 def llm(system, history, post=requests.post):
     r = post(os.environ.get("LLM_BASE_URL", "https://api.x.ai/v1").rstrip("/") + "/chat/completions",
