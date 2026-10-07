@@ -1,0 +1,123 @@
+# Persona scenes acted out in the wheel channel when an event goes live (oku_slack/wheel/scenes.py).
+# [scenes.<event key>]: premise = situation for the LLM; beats = 4-8 turns spread over the event duration.
+#   beat.persona = persona key from config.toml (babis, alenka, bourak, marty, peta, kalousek) or "monika" (wheel host)
+#   beat.cue = what this turn should do (LLM instruction, Czech); beat.fallback = templated line when the LLM is unavailable.
+# The first beat is posted top-level in the channel (short, punchy); the rest go into its thread.
+# The legendary "snemovna" event keeps its fixed Titanic script (events/titanic.toml), no LLM.
+# [show]: live-event poll (per event override under [show.events.<key>.poll]) and the OKÚ lore quiz pool.
+
+[scenes.porada]
+premise = "Mimořádná porada OKÚ. Andrej Babiš předsedá a chce slyšet čísla a zisk. Ostatní se vymlouvají."
+beats = [
+  { persona = "babis", cue = "Zahaj poradu jednou úderně krátkou větou a chtěj čísla.", fallback = "Porada! Hned! Chci vidět čísla, zisk, všechno!" },
+  { persona = "babis", cue = "Vyvolej Alenku a chtěj od ní čísla za kantýnu.", fallback = "Alenko, kolik vydělala kantýna? Přesně, na korunu." },
+  { persona = "alenka", cue = "Odpověz Babišovi na dotaz na čísla kantýny, vymlouvej se na hranolky.", fallback = "Pane předsedo, hranolky šly skvěle, jen ta čísla se nějak smažila s nimi." },
+  { persona = "marty", cue = "Pochlub se vymyšlenými KPI ze sociálních sítí.", fallback = "Engagement nahoru o 300 procent. Lajky jsou nová měna, šéfe." },
+  { persona = "kalousek", cue = "Vysvětli, kdo za ztráty může (ne ty).", fallback = "Ztráty? To je zděděný stav. Já za nic nemůžu." },
+  { persona = "babis", cue = "Ukonči poradu: shrň, že zisk musí růst a všichni mají úkol.", fallback = "Takže: zisk nahoru, výmluvy dolů. Konec porady, makáme!" },
+]
+
+[scenes.tiskovka]
+premise = "Tisková konference OKÚ. Babiš odpovídá novinářům, Marty řídí PR, Kalousek přihazuje."
+beats = [
+  { persona = "babis", cue = "Zahaj tiskovku jednou rázně krátkou větou.", fallback = "Dobrý den, tiskovka! Žádné kampaně, jen fakta!" },
+  { persona = "marty", cue = "Uveď tiskovku jako PR šéf a slib virální moment.", fallback = "Kamery běží, hashtag je připravený. Tohle bude virální." },
+  { persona = "babis", cue = "Odpověz na dotaz novináře na dotace, odmítni to jako kampaň.", fallback = "Dotace? To je účelovka. Já jsem jenom pracoval." },
+  { persona = "kalousek", cue = "Vstup do toho jedovatou poznámkou.", fallback = "Já bych jen připomněl, že tohle všechno se dalo čekat." },
+  { persona = "babis", cue = "Ukonči tiskovku jednou větou a odejdi.", fallback = "Děkuji, dotazy nebudou. Jdeme pracovat!" },
+]
+
+[scenes.kantyna]
+premise = "Alenka Hranolka slavnostně otevírá kantýnu OKÚ. Menu je podezřele hranolkové."
+beats = [
+  { persona = "alenka", cue = "Slavnostně otevři kantýnu, krátce a s nadšením.", fallback = "Kantýna je otevřená! Dneska hranolky, zítra hranolky, pozítří překvapení: hranolky!" },
+  { persona = "babis", cue = "Zeptej se Alenky na cenu oběda a marži.", fallback = "Alenko, a jaká je marže na těch hranolkách?" },
+  { persona = "alenka", cue = "Odpověz Babišovi na marži a nabídni mu porci zdarma.", fallback = "Marže je tajná, ale porce pro vás je zdarma, pane předsedo." },
+  { persona = "bourak", cue = "Pochval rychlost obsluhy autařskými přirovnáními.", fallback = "Obsluha jak pit stop. Hranolky z nuly na sto za tři vteřiny." },
+  { persona = "alenka", cue = "Zavři výdej a slib zítřejší menu.", fallback = "Výdej končí! Zítra speciál: hranolky na tři způsoby." },
+]
+
+[scenes.disko]
+premise = "Peťa Maci pořádá disko v OKÚ. Světla, beat, všichni tancují, jen Babiš počítá náklady."
+beats = [
+  { persona = "peta", cue = "Rozjeď disko jednou energickou větou.", fallback = "Světla ztlumit, basy nahoru! Disko OKÚ začíná!" },
+  { persona = "babis", cue = "Zeptej se, kolik stojí elektřina za ta světla.", fallback = "Kdo to platí? Kolik žere ta disko koule?" },
+  { persona = "peta", cue = "Odpověz Babišovi a vytáhni ho na parket.", fallback = "Šéfe, rytmus je zadarmo! Pojďte na parket." },
+  { persona = "marty", cue = "Natáčej to na sítě a komentuj virálnost.", fallback = "Tohle točím vertikálně. Babiš tančí, to je milion zhlédnutí." },
+  { persona = "peta", cue = "Ukonči disko poslední písničkou.", fallback = "Poslední ploužák a jde se domů. Díky, OKÚ!" },
+]
+
+[scenes.socky]
+premise = "Marty Prchal, marketingový génius, vysvětluje týmu strategii sociálních sítí."
+beats = [
+  { persona = "marty", cue = "Zahaj prezentaci strategie sociálních sítí jednou větou.", fallback = "Lidi, mám strategii. Tři slova: víc, rychleji, vertikálně." },
+  { persona = "babis", cue = "Chtěj vědět, kolik to vydělá.", fallback = "A kolik to vydělá? Lajky na účet nepošleš." },
+  { persona = "marty", cue = "Odpověz Babišovi vymyšlenými metrikami.", fallback = "Dosah 4 miliony, konverze přes střechu. Vydělá to na všechno." },
+  { persona = "peta", cue = "Navrhni, že k videu potřebují taneční challenge.", fallback = "Chce to taneční challenge. Dám vám beat." },
+  { persona = "marty", cue = "Shrň strategii a oznam, že video už běží.", fallback = "Hotovo. Video je venku a algoritmus nás miluje." },
+]
+
+[scenes.vina]
+premise = "Kalousek vede vyšetřování, kdo za co může. Vždycky to vyjde na někoho jiného."
+beats = [
+  { persona = "kalousek", cue = "Zahaj hledání viníka jednou kousavou větou.", fallback = "Dámy a pánové, hledáme viníka. Já to nejsem, to rovnou říkám." },
+  { persona = "babis", cue = "Obviň Kalouska.", fallback = "Za všechno může Kalousek! Všichni to vědí." },
+  { persona = "kalousek", cue = "Odraž obvinění a hoď to na Bouráka.", fallback = "Já? Podívejte se spíš na Bouráka a jeho jízdy." },
+  { persona = "bourak", cue = "Braň se autařskou výmluvou.", fallback = "Já jen jel. Zelená byla, ne?" },
+  { persona = "kalousek", cue = "Vynes rozsudek, že vina je kolektivní, jen ne tvoje.", fallback = "Závěr: vina je kolektivní. Kromě mě, samozřejmě." },
+]
+
+[scenes.bourak]
+premise = "Filip Bourák Turek vyráží na zelenou jízdu: ekologicky, ale rychle."
+beats = [
+  { persona = "bourak", cue = "Ohlas start zelené jízdy jednou větou.", fallback = "Startuju zelenou jízdu! Ekologicky, ale nula až sto za čtyři." },
+  { persona = "babis", cue = "Zeptej se, kolik to stálo a kdo to platí.", fallback = "A kdo platí ten benzín? Teda elektřinu?" },
+  { persona = "bourak", cue = "Odpověz Babišovi a pochlub se rychlostí.", fallback = "Šéfe, rekuperace! Brzdím a vyrábím peníze." },
+  { persona = "kalousek", cue = "Upozorni, že až se něco stane, nebude to tvoje vina.", fallback = "Až to bourák zase někam napálí, já jsem nic neviděl." },
+  { persona = "bourak", cue = "Dojeď do cíle a vyhlas rekord.", fallback = "Cíl! Nový rekord a ani jedna pokuta. Zatím." },
+]
+
+[show]
+poll = { q = "Kdo za to může?", options = ["Kalousek", "Babiš", "Kore", "ICIK"] }
+
+[show.events.kantyna.poll]
+q = "Co bude zítra v kantýně?"
+options = ["Hranolky", "Hranolky s hranolkami", "Překvapení", "Dieta"]
+
+[show.events.disko.poll]
+q = "Kdo vládne parketu?"
+options = ["Peťa", "Babiš", "Marty", "Kalousek"]
+
+[show.events.socky.poll]
+q = "Kolik lajků dá Martyho video?"
+options = ["Tisíc", "Milion", "Všechny", "Žádný"]
+
+[[show.quiz]]
+q = "Kdo za všechno může?"
+options = ["Kalousek", "Alenka", "Marty"]
+answer = 0
+
+[[show.quiz]]
+q = "Co chce Babiš na každé poradě slyšet?"
+options = ["Čísla a zisk", "Vtipy", "Ticho"]
+answer = 0
+
+[[show.quiz]]
+q = "Čím je proslavená kantýna Alenky Hranolky?"
+options = ["Saláty", "Hranolky", "Sushi"]
+answer = 1
+
+[[show.quiz]]
+q = "Kdo je marketingový génius OKÚ?"
+options = ["Kalousek", "Bourák", "Marty Prchal"]
+answer = 2
+
+[[show.quiz]]
+q = "Jakou jízdu pořádá Bourák?"
+options = ["Zelenou", "Modrou", "Noční"]
+answer = 0
+
+[[show.quiz]]
+q = "Kdo pořádá OKÚ disko?"
+options = ["Peťa Maci", "Monika", "Babiš"]
+answer = 0

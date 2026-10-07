@@ -36,3 +36,8 @@ legendary = [
   "Tohle se nestává! LEGENDÁRNÍ políčko! Přímý přenos!",
   "Zastavte všechno! Legenda je tady!",
 ]
+bets = [
+  "Sázky jsou otevřené! Kdo věří svému políčku?",
+  "Vsaďte si, milánkové, kolo nikoho nešetří!",
+  "Žetony na stůl! Za chvíli se točí!",
+]

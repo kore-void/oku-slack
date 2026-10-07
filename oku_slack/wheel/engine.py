@@ -1,10 +1,14 @@
 """Pure wheel logic. All time comes from an injectable clock; all randomness from an injectable RNG.
 tick() advances the state machine and returns notifications for the Slack adapter / room hub."""
-import random, string, time, uuid
+import json, random, string, threading, time, uuid
+from . import economy, effects, show
 
 # Event states: pending -> (all confirmed) ready -> (start_at reached) live -> done
 #               pending -> (start_at + confirm_wait_s, not all confirmed) expired
+#               pending/ready -> (charged veto_respin) vetoed
 # Event start = max(start_at, moment of last confirmation): it never starts without ALL players.
+# Betting round (kv "round"): Točit opens a bet_window_s window; when it closes the tick spins the wheel and the
+# round's bets are settled at reveal. All public mutations hold self.lock (Slack threads + tick loop).
 SEQ_STEPS = [(0, "Nabíjím..."), (30, "Čau lidi!"), (60, "Kampaň běží"), (90, "Finále"), (110, "Dojezd")]
 CODE_ALPHABET = "ABCDEFHJKLMNPRSTUVXYZ2345678"  # no 0/O/1/I/G/Q/W confusion
 
@@ -16,6 +20,19 @@ class Engine:
         self.cfg, self.s, self.store, self.clock = cfg, cfg["settings"], store, clock
         self.rng = rng or random.SystemRandom()
         self.holds = {}  # (event_id, player) -> start ts (server time)
+        self.lock = threading.RLock()
+        self.outbox = []  # notifications queued by actions/effects; drained by tick()
+        self.eco = economy.Economy(cfg, store, clock)
+
+    def emit(self, kind, obj): self.outbox.append((kind, obj))
+
+    def persona_name(self, k):
+        return {"babis": "Andrej Babiš", "alenka": "Alenka", "bourak": "Bourák", "marty": "Marty", "peta": "Peťa",
+                "kalousek": "Kalousek", "monika": "Monika"}.get(k, k)
+
+    def shielded(self, p):
+        v = self.store.kv_get(f"shield:{p}")
+        return bool(v) and float(v) > self.clock()
 
     # ---------- helpers ----------
     def players(self): return list(self.cfg["players"])
@@ -45,6 +62,35 @@ class Engine:
         e["host_say"] = {"kind": kind, "text": text, "at": self.clock(), "name": self.cfg.get("host", {}).get("name", "")}
         return text
 
+    # ---------- betting round ----------
+    def round(self):
+        v = self.store.kv_get("round")
+        r = json.loads(v) if v else None
+        return r if r and r.get("state") == "open" else None
+
+    def _set_round(self, r): self.store.kv_set("round", json.dumps(r) if r else "")
+
+    def open_bets(self, by):
+        """Točit with a betting window. Returns the round; the tick spins when it closes."""
+        with self.lock:
+            self._player(by); self._check_free()
+            now = self.clock()
+            r = {"id": uuid.uuid4().hex[:8], "by": by, "opened_at": now, "closes_at": now + float(self.s["bet_window_s"]), "state": "open"}
+            self._set_round(r)
+            return r
+
+    def bet(self, p, key, amount):
+        with self.lock:
+            self._player(p)
+            try: return self.eco.place(self.round(), p, key, amount)
+            except economy.EconomyError as err: raise WheelError(err.code, str(err))
+
+    def _check_free(self):
+        a = self.active_event()
+        if a: raise WheelError("event_active", self.busy_reason(a))
+        r = self.round()
+        if r: raise WheelError("betting", f"Kolo je obsazené: běží sázky do {time.strftime('%H:%M:%S', time.localtime(r['closes_at']))}.")
+
     def busy_reason(self, e):
         """Czech, human explanation why the wheel is blocked and when it frees up."""
         hm = lambda t: time.strftime("%H:%M", time.localtime(t))
@@ -68,10 +114,12 @@ class Engine:
             raise WheelError("unknown_event_key", force)
         return self.rng.choices(range(len(evs)), weights=[e["weight"] for e in evs])[0]
 
-    def spin(self, by, lead_s=None, force=None):
+    def spin(self, by, lead_s=None, force=None, round_id=None, respin_of=None):
+      with self.lock:
         self._player(by)
         a = self.active_event()
         if a: raise WheelError("event_active", self.busy_reason(a))
+        if round_id is None and self.round(): self._check_free()
         evs = self.cfg["events"]
         idx = self.pick(force)
         n = len(evs); seg = 360.0 / n
@@ -86,7 +134,8 @@ class Engine:
              "code": "".join(self.rng.choice(CODE_ALPHABET) for _ in range(4)),
              "confirmed": {}, "state": "pending", "alarm_sent": False, "live_at": None, "end_at": None,
              "legendary": bool(evs[idx].get("legendary")), "script": evs[idx].get("script"),
-             "revealed": False, "nagged": False, "beat": None, "forced": force is not None}
+             "revealed": False, "nagged": False, "beat": None, "forced": force is not None,
+             "round_id": round_id, "respin_of": respin_of}
         self.host_say("legendary" if e["legendary"] else "spin", e)
         self.store.put_event(e)
         return e
@@ -95,11 +144,14 @@ class Engine:
     def _confirm(self, e, p, how):
         if e["state"] not in ("pending",): raise WheelError("not_confirmable", e["state"])
         e["confirmed"][p] = {"at": self.clock(), "how": how}
+        if self.clock() <= e["start_at"] and self.s.get("points_confirm"):
+            self.eco.add(p, int(self.s["points_confirm"]), "potvrzení včas", e["id"]); e["confirmed"][p]["points"] = int(self.s["points_confirm"])
         if set(e["confirmed"]) >= set(self.players()): e["state"] = "ready"
         self.store.put_event(e)
         return e
 
     def confirm_code(self, eid, p, code):
+      with self.lock:
         self._player(p); e = self._event(eid)
         if (code or "").strip().upper() != e["code"]: raise WheelError("bad_code", "Špatný kód.")
         return self._confirm(e, p, "code")
@@ -110,7 +162,8 @@ class Engine:
         return self.holds[(eid, p)]
 
     def hold_end(self, eid, p):
-        """Server-side measured hold; client timestamps are ignored."""
+      """Server-side measured hold; client timestamps are ignored."""
+      with self.lock:
         self._player(p); e = self._event(eid)
         start = self.holds.pop((eid, p), None)
         if start is None: raise WheelError("no_hold", "Nejdřív podrž tlačítko.")
@@ -124,15 +177,69 @@ class Engine:
         return 0.0 if last is None else max(0.0, last + self.s["cooldown_s"] - self.clock())
 
     def use_command(self, p):
+      """Charged command: runs the player's configured effects (effects.REGISTRY), then a 2-min sequence
+      whose steps narrate the effects live in the panel. Cooldown is spent only if some effect applied."""
+      with self.lock:
         left = self.cooldown_left(p)
         if left > 0: raise WheelError("cooldown", f"Nabíjí se, zbývá {int(left // 60)}:{int(left % 60):02d}.")
+        pc = self.cfg["players"][p]; label = pc.get("command", "Příkaz")
+        ctx = {"label": label, "persona": pc.get("command_persona")}
+        results = []
+        for name in pc.get("command_effects", []):
+            fn = effects.REGISTRY.get(name)
+            if fn is None: continue
+            r = dict(fn(self, p, ctx)); r["effect"] = name; results.append(r)
+        if pc.get("command_effects") and not any(r["ok"] for r in results):
+            raise WheelError("no_effect", " ".join(r["text"] for r in results) or "Příkaz teď nemá na co působit.")
         now = self.clock()
         self.store.set_used(p, now)
-        seq = {"id": uuid.uuid4().hex[:8], "player": p, "label": self.cfg["players"][p].get("command", "Příkaz"),
+        texts = [r["text"] for r in results if r["ok"]]
+        if texts:
+            steps = [(0, f"⚡ {label}!")] + [(4 + 26 * i, t) for i, t in enumerate(texts)]
+            steps += [(off, t) for off, t in SEQ_STEPS[3:] if off > steps[-1][0]]
+        else:
+            steps = SEQ_STEPS
+        seq = {"id": uuid.uuid4().hex[:8], "player": p, "label": label, "effects": results,
                "start_at": now, "end_at": now + self.s["sequence_s"], "step": 0, "state": "running",
-               "steps": [{"at": now + off, "text": t} for off, t in SEQ_STEPS if off < self.s["sequence_s"]]}
+               "steps": [{"at": now + off, "text": t} for off, t in steps if off < self.s["sequence_s"]]}
         self.store.put_sequence(seq)
         return seq
+
+    # ---------- live show (poll, minigames, hype) ----------
+    def _live_event(self):
+        e = self.active_event()
+        if not e or e["state"] != "live": raise WheelError("not_live", "Teď neběží žádná událost.")
+        return e
+
+    def vote(self, p, i):
+        with self.lock:
+            self._player(p); e = self._live_event()
+            try: first = show.vote(e, p, int(i))
+            except show.ShowError as err: raise WheelError(err.code, str(err))
+            if first and self.s.get("points_vote"): self.eco.add(p, int(self.s["points_vote"]), "hlasování", e["id"])
+            self.store.put_event(e); return e["show"]["poll"]
+
+    def catch(self, p):
+        with self.lock:
+            self._player(p); e = self._live_event()
+            try: show.catch(e, p, self.clock())
+            except show.ShowError as err: raise WheelError(err.code, str(err))
+            self.eco.add(p, int(self.s["points_catch"]), "chycená dotace", e["id"]); self.store.put_event(e)
+            return int(self.s["points_catch"])
+
+    def quiz(self, p, i):
+        with self.lock:
+            self._player(p); e = self._live_event()
+            try: ok = show.quiz_answer(e, p, int(i), self.clock())
+            except show.ShowError as err: raise WheelError(err.code, str(err))
+            if ok: self.eco.add(p, int(self.s["points_quiz"]), "kvíz", e["id"])
+            self.store.put_event(e); return ok
+
+    def hype(self, delta):
+        with self.lock:
+            e = self.active_event()
+            if not e or e["state"] != "live" or not show.hype(e, delta): return False
+            self.store.put_event(e); return True
 
     # ---------- chat ----------
     def chat(self, p, text):
@@ -143,11 +250,27 @@ class Engine:
 
     # ---------- clock-driven state machine ----------
     def tick(self):
-        now, out = self.clock(), []
+      with self.lock:
+        now = self.clock()
+        out, self.outbox = list(self.outbox), []
+        r = self.round()
+        if r and now >= r["closes_at"]:
+            r["state"] = "closed"; self._set_round(r)
+            try:
+                ev = self.spin(r["by"], round_id=r["id"]); out.append(("spin", ev))
+            except WheelError:
+                self.eco.refund(r["id"])
         for e in self.store.events():
             ch = False
             if not e.get("revealed", True) and now >= e["spin_at"] + self.s["spin_ms"] / 1000:
                 e["revealed"] = True; ch = True; self.host_say("result", e); out.append(("reveal", e))
+                if e.get("round_id"):
+                    mult = {}
+                    for p in self.players():
+                        if self.store.kv_get(f"double:{p}"): mult[p] = 2; self.store.kv_set(f"double:{p}", "")
+                    res = self.eco.settle(e["round_id"], e["key"], mult)
+                    e["bets_result"] = [{"player": b["player"], "key": b["key"], "amount": b["amount"], "state": b["state"], "payout": b["payout"]} for b in res]
+                    if res: out.append(("settled", e))
             if e["state"] in ("pending", "ready") and not e["alarm_sent"] and now >= e["start_at"] - self.s["alarm_before_s"]:
                 e["alarm_sent"] = True; ch = True; self.host_say("alarm", e); out.append(("alarm", e))
             if e["state"] == "pending" and not e.get("nagged", True) and now >= e["start_at"] - self.s["nag_before_s"] and self.missing(e):
@@ -156,11 +279,13 @@ class Engine:
                 out.append(("nag", e))
             if e["state"] == "ready" and now >= e["start_at"]:
                 e["state"], e["live_at"] = "live", now
-                e["end_at"] = now + e["duration_s"]; ch = True; out.append(("live", e))
+                e["end_at"] = now + e["duration_s"]; ch = True
+                show.plan(self.cfg, e, self.rng); out.append(("live", e))
             elif e["state"] == "pending" and now >= e["start_at"] + self.s["confirm_wait_s"]:
                 e["state"] = "expired"; ch = True; self.host_say("expiry", e); out.append(("expired", e))
             elif e["state"] == "live" and now >= e["end_at"]:
                 e["state"] = "done"; ch = True; out.append(("done", e))
+            if e["state"] == "live" and show.tick(e, now): ch = True; out.append(("show", e))
             if e["state"] == "live" and e.get("script"):
                 b = self.cinematic(e, now)["beat"]
                 if b != e.get("beat"): e["beat"] = b; ch = True; out.append(("beat", e))
@@ -201,4 +326,6 @@ class Engine:
                 "wheel": [{"key": x["key"], "title": x["title"], "color": x.get("color", "#888"), "label": x.get("label")} for x in self.cfg["events"]],
                 "players": {k: {"name": v["name"], "cooldown_left": self.cooldown_left(k)} for k, v in self.cfg["players"].items()},
                 "sequences": [q for q in self.store.sequences() if q["state"] == "running"],
+                "round": self.round(), "bets": self.store.bets(self.round()["id"]) if self.round() else [],
+                "board": self.eco.board(), "odds": self.eco.all_odds(),
                 "chat": self.store.chat()}

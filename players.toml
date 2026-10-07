@@ -12,18 +12,39 @@ spin_ms = 6000           # wheel spin animation length in the room
 slack_channel = "C0C6W8E6NP9"  # oku-porada: alarms/results
 allow_force = true      # testing: allow forced spins (set false in production)
 nag_before_s = 120      # host nags missing players this long before start
+# --- v2: OKÚ korun (points), bets, charged-command effects, live show ---
+start_points = 1000     # every player starts with this many OKÚ korun (balance = start + ledger)
+bet_window_s = 30       # Točit opens a betting window this long; 0 = spin immediately (no bets)
+min_bet = 10
+house_edge = 0.1        # odds = total_weight / segment_weight * (1 - house_edge); legendary pays big
+min_odds = 1.5
+steal_pct = 10          # steal_points effect: % of the victim's balance
+shield_s = 1800         # shield effect duration
+points_confirm = 50     # confirming before the start time
+points_vote = 10        # first vote in a live poll
+points_catch = 150      # "Chyť dotaci" minigame winner
+points_quiz = 100       # correct quiz answer
+catch_window_s = 10     # how long the "Chyť dotaci" button is visible
+quiz_window_s = 60
+scene_llm = true        # persona scenes via the oku_slack LLM path (false = templated lines only)
+scene_llm_timeout_s = 25
 
 [players.kore]
 name = "Kore"
 slack_id = "U0C6XAN3EG3"
 room_key = "kore-local"
 command = "Sorry jako"        # Kore's charged command label
+# Effects (oku_slack/wheel/effects.py REGISTRY): veto_respin, steal_points, double_bet, persona_interrupt, shield.
+command_effects = ["veto_respin", "persona_interrupt"]   # veto the current result + respin; Babiš interrupts
+command_persona = "babis"
 
 [players.icik]
 name = "ICIK"
 slack_id = "U0C75FSEK2M"
 room_key = "icik-local"
 command = "Kalousek za to může"
+command_effects = ["steal_points"]   # steals steal_pct % of the leader's points; Kalousek posts a one-liner
+command_persona = "kalousek"
 
 [[events]]
 key = "porada"

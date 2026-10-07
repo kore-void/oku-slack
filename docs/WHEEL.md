@@ -57,7 +57,6 @@ ICIK: `http://<host>:8797/?p=icik&k=icik-local`. Env: `OKU_WHEEL_CONFIG`, `OKU_W
 Slack cannot animate: it gets the stopped wheel PNG + result text; the animation is in the room.
 
 ## Open items
-- ICIK Slack id is a placeholder in `players.toml`.
 - Room is bound to 127.0.0.1; ICIK needs a public URL (tunnel / hosting) and real `room_key`s.
 - Music: only the built-in synthesized cue is shipped; any `music_url` must be licensed.
 
@@ -85,3 +84,68 @@ Triggers: spin (or `legendary`), `reveal` after the spin animation (`spin_ms`), 
 - `render.spin_gif`: 40 frames, 420 px, ease-out identical to the room, blinking marquee bulbs, adaptive palette per frame, last frame = result with banner (2.2 s), ~1.7 MB. Posted in the thread of the spin message.
 - `render.png`: 800 px, 3x supersampled: radial-gradient segments, gold rim with marquee bulbs, glossy OKÚ hub, pointer with shadow, stage spotlight, Czech labels (Segoe UI Bold).
 - Bot scopes (manifests/kolo.yaml): commands, chat:write, files:write, files:read, canvases:write, canvases:read.
+
+## Wheel v2: persona scenes, OKÚ korun + bets, charged effects, live show
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant P as Player (Slack panel)
+  participant K as OKÚ Kolo app (Socket Mode)
+  participant E as engine (tick 0.5 s, lock)
+  participant DB as SQLite (ledger, bets, kv)
+  participant S as SceneRunner
+  participant B as Persona bots (Web API only)
+  P->>K: 🎡 Točit
+  K->>E: open_bets (bet_window_s = 30 s)
+  P->>K: select segment + 50/100/250/All-in
+  K->>E: bet (stake escrowed)
+  E->>DB: ledger -stake, bets row
+  E-->>E: window closes -> spin(round_id)
+  E-->>DB: reveal -> settle (stake x odds, x2 if double_bet)
+  P->>K: ✅ confirm (code modal) (+50 if in time)
+  E-->>S: live -> plan scene (4-8 beats / Titanic script)
+  S->>B: beat 1 top-level (short), rest in its thread
+  Note over S,B: line = core.build_prompt(persona) + core.generate (Gemini, same keys as the bridge); template fallback
+  P->>K: ⚡ Nabitý příkaz
+  K->>E: use_command -> effects registry
+  E-->>S: persona_line (Babiš interrupts / Kalousek one-liner)
+  P->>K: poll / 💸 Chyť dotaci / 🧠 quiz
+  K->>E: vote / catch / quiz (+points)
+  B-->>K: reaction_added / removed on panel + scene messages
+  K->>E: hype ±1
+```
+
+| Module | Role |
+|---|---|
+| `economy.py` | balances (`start_points` + ledger), weight-based odds (`total/weight * (1-house_edge)`, min `min_odds`), bets (escrow, settle, refund), leaderboard |
+| `effects.py` | charged-command effect registry: `veto_respin`, `steal_points`, `double_bet`, `persona_interrupt`, `shield` |
+| `show.py` | live show state on the event: poll, `Chyť dotaci` (first click in a `catch_window_s` window), 3-option OKÚ quiz, hype meter |
+| `scenes.py` + `scenes.toml` | persona scene per event key (premise + 4-8 beats with cue + fallback), timing, LLM generation, resume after restart |
+| `personas.py` | posting as persona bots (`SLACK_OKU_<KEY>_BOT_TOKEN`, Babiš also `SLACK_OKU_BOT_TOKEN`), fallback narration by the wheel bot |
+
+### Points, bets, leaderboard
+- Every player starts with `start_points` (1000) OKÚ korun. Every change is a `ledger` row (auditable); bets live in `bets`.
+- **Točit** opens a `bet_window_s` (30 s) betting round (panel: countdown, segment select with odds, 💰 50 / 100 / 250 / 💥 All-in).
+  When the window closes the tick spins; bets are settled at the reveal. `/kolo toc <key>` (forced, testing) spins immediately without bets.
+- Points also for: confirming before the start (`points_confirm`), first poll vote (`points_vote`), catching the subsidy (`points_catch`), correct quiz answer (`points_quiz`).
+- Leaderboard (top 5) is always in the panel; `/kolo zebricek`. `/kolo sazka <key> <amount|all>` bets from the command line.
+
+### Charged commands (30-min cooldown kept)
+`players.<p>.command_effects` + `command_persona` in `players.toml`. A command is accepted when at least one effect applies (else the cooldown is not spent).
+The 2-min sequence narrates the effects live in the panel (`Sekvence` field).
+- Kore "Sorry jako": `veto_respin` (cancels the current not-yet-live result, refunds unrevealed stakes, respins) + `persona_interrupt` (Babiš jumps in).
+- ICIK "Kalousek za to může": `steal_points` (`steal_pct` % of the leader's balance; the richest other player if ICIK leads; blocked by `shield`), Kalousek posts a one-liner.
+
+### Persona scenes
+- On `live`, `SceneRunner` posts the scene: the first beat is a short top-level line in the wheel channel, the rest go into its thread.
+- Each line: persona prompt via `oku_slack.core.build_prompt` (same persona files as the bridge) + `core.generate` (Gemini; env `LLM_BACKEND`, `OKU_GEMINI_ENV_FILE` like the bridge's Heimdall service).
+  Transcript so far + any running charged sequence go into the prompt. Error, empty answer, or more than `scene_llm_timeout_s` -> the beat's templated `fallback`.
+- Titanic legend: fixed script lines; `turek` -> Bourák bot, `marty` -> Marty bot, `monika` and `macinka` -> wheel bot (with `username` override if `chat:write.customize` is granted, else narrated by Monika).
+- Loop safety: persona posts are bot messages; `oku_slack.bridge.ignored()` drops every event with `bot_id`/`subtype` (both `app_mention` and `message`), so the bridge never answers them and the meeting "porada" trigger never fires on them. Mentions (`<@…>`, `<!…>`) are stripped from generated lines.
+- Persona bots are already members of #oku-porada; a bot that is missing/refused degrades to wheel-bot narration.
+
+### Slack app changes (A0C7EUMGZ98, manifests/kolo.yaml)
+- Bot scopes: `reactions:read` (hype meter), `chat:write.customize` (optional name override).
+- Event subscriptions (bot events): `reaction_added`, `reaction_removed`. Reinstall the app after the change.
+- Until granted: the hype meter stays at 0 and Macinka/Monika lines are narrated; everything else works. Granted scopes are read from the `x-oauth-scopes` header of `auth.test` at start.

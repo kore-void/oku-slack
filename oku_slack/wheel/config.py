@@ -2,7 +2,11 @@ import os, pathlib, tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DEFAULTS = dict(cooldown_s=1800, sequence_s=120, alarm_before_s=300, lead_s=600, confirm_wait_s=60,
-                hold_min_s=2.0, spin_ms=6000, slack_channel="")
+                hold_min_s=2.0, spin_ms=6000, slack_channel="",
+                # v2: points / bets / effects / show
+                start_points=1000, bet_window_s=30, min_bet=10, house_edge=0.1, min_odds=1.5,
+                steal_pct=10, shield_s=1800, points_confirm=50, points_vote=10, points_catch=150, points_quiz=100,
+                catch_window_s=10, quiz_window_s=60, scene_llm=True, scene_llm_timeout_s=25)
 
 def load(path=None):
     path = pathlib.Path(path or os.environ.get("OKU_WHEEL_CONFIG") or ROOT / "players.toml")
@@ -27,4 +31,6 @@ def load(path=None):
         if e.get("script"):
             with open(here / "events" / f"{e['script']}.toml", "rb") as f: scripts[e["script"]] = tomllib.load(f)
             e["duration_s"] = scripts[e["script"]].get("duration_s", e["duration_s"])
-    return {"settings": s, "players": players, "events": events, "host": host, "scripts": scripts}
+    with open(here / "scenes.toml", "rb") as f: sc = tomllib.load(f)
+    return {"settings": s, "players": players, "events": events, "host": host, "scripts": scripts,
+            "scenes": sc.get("scenes", {}), "show": sc.get("show", {})}

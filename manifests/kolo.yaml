@@ -20,7 +20,13 @@ oauth_config:
       - files:read
       - canvases:write
       - canvases:read
+      - reactions:read        # v2: hype meter (reaction_added / reaction_removed events)
+      - chat:write.customize  # v2 (optional): wheel bot posts as "Petr Macinka" / "Monika Babišová" (else Monika narrates)
 settings:
+  event_subscriptions:
+    bot_events:
+      - reaction_added
+      - reaction_removed
   interactivity:
     is_enabled: true
   org_deploy_enabled: false

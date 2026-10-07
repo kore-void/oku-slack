@@ -2,13 +2,15 @@
 Uses a DEDICATED app (env SLACK_OKU_WHEEL_BOT_TOKEN / SLACK_OKU_WHEEL_APP_TOKEN, manifests/kolo.yaml) so a second
 Socket Mode connection never steals events from the live persona bridge. Tokens are read from env, never logged."""
 import logging, os, time
-from . import canvas, engine, panel, render
+from . import canvas, engine, panel, render, personas, scenes as _scenes
 
 log = logging.getLogger("oku_wheel.slack")
 MODAL_ID = "kolo_confirm"
 HOSTS = {"monika": "Monika Babišová", "babis": "Andrej Babiš", "alenka": "Alenka", "bourak": "Bourák", "marty": "Marty", "peta": "Peťa", "kalousek": "Kalousek"}
-HELP = ("*/kolo* pošle ovládací panel · */kolo toc* roztočí kolo (*/kolo toc <klíč>* vynutí událost, pokud allow_force) · */kolo potvrdit* (modál s kódem) · */kolo prikaz* nabitý příkaz (1× za 30 min) · "
-        "*/kolo stav*")
+HELP = ("*/kolo* pošle ovládací panel · */kolo toc* otevře sázky a roztočí kolo (*/kolo toc <klíč>* vynutí událost bez sázek, pokud allow_force) · "
+        "*/kolo sazka <klíč> <částka|all>* · */kolo potvrdit* (modál s kódem) · */kolo prikaz* nabitý příkaz (1× za 30 min) · "
+        "*/kolo zebricek* · */kolo stav*")
+PICKS = {}  # slack user -> last segment chosen in the panel select (fallback when the payload has no state)
 
 def env_token(name):
     """Token from process env, else from the user registry (HKCU\\Environment) so a supervisor started
@@ -24,15 +26,46 @@ def room_url(): return os.environ.get("OKU_WHEEL_PUBLIC_URL", "http://127.0.0.1:
 
 def _hm(ts): return time.strftime("%H:%M", time.localtime(ts))
 
-def handle_command(eng, user_id, text):
-    """Returns {"text": ephemeral reply, "open_modal": bool, "spin": event|None, "seq": sequence|None}."""
+def _pts(n): return panel._pts(n)
+
+def handle_command(eng, user_id, text, pick=None):
+    """Returns {"text": ephemeral reply ('' = silent), "open_modal": bool, "spin": event|None, "seq": sequence|None,
+    "round": betting round|None, "changed": bool (panel should re-render)}."""
     p = eng.player_by_slack(user_id)
     if p is None: return {"text": "Nejsi v seznamu hráčů (players.toml).", "open_modal": False}
     arg = (text or "").strip().lower()
+    titles = {x["key"]: x["title"] for x in eng.cfg["events"]}
     try:
         parts = arg.split()
         if not parts or parts[0] == "panel":
             return {"text": "Ovládací panel kola posílám do kanálu.", "panel": True, "open_modal": False}
+        if parts[0] in ("zebricek", "žebříček", "body", "leaderboard"):
+            rows = "\n".join(f"{i + 1}. {r['name']} · *{_pts(r['points'])}*" for i, r in enumerate(eng.eco.board()))
+            return {"text": f"🏆 *Žebříček OKÚ korun*\n{rows}\n🪙 Ty máš {_pts(eng.eco.balance(p))}.", "open_modal": False}
+        if parts[0] == "pick":
+            if len(parts) > 1: PICKS[user_id] = parts[1]
+            return {"text": "", "open_modal": False}
+        if parts[0] in ("bet", "sazka", "sázka"):
+            if parts[0] == "bet": key, amount = (pick or PICKS.get(user_id)), (parts[1] if len(parts) > 1 else "")
+            else: key, amount = (parts[1] if len(parts) > 1 else None), (parts[2] if len(parts) > 2 else "")
+            if not key: return {"text": "Nejdřív vyber v panelu políčko, na které sázíš.", "open_modal": False}
+            amount = "all" if amount in ("all", "allin", "vse", "vše") else (int(amount) if amount.isdigit() else 0)
+            b = eng.bet(p, key, amount)
+            return {"text": f"💰 Vsadil(a) jsi {_pts(b['amount'])} na *{titles.get(key, key)}* (×{b['odds']}). Zůstatek {_pts(eng.eco.balance(p))}.",
+                    "open_modal": False, "changed": True}
+        if parts[0] == "poll":
+            poll = eng.vote(p, int(parts[1]))
+            return {"text": f"📊 Hlas pro *{poll['options'][int(parts[1])]}* zapsán.", "open_modal": False, "changed": True}
+        if parts[0] == "catch":
+            n = eng.catch(p)
+            return {"text": f"💸 Dotace je tvoje! +{_pts(n)}", "open_modal": False, "changed": True}
+        if parts[0] == "quiz":
+            ok = eng.quiz(p, int(parts[1]))
+            return {"text": f"🧠 Správně! +{_pts(eng.s['points_quiz'])}" if ok else "🧠 Vedle. Příště!", "open_modal": False, "changed": True}
+        if parts[0] in ("toc", "toč", "spin") and len(parts) == 1 and float(eng.s.get("bet_window_s", 0)) > 0:
+            r = eng.open_bets(p)
+            return {"text": f"💰 Sázky jsou otevřené na {int(eng.s['bet_window_s'])} s! V panelu vyber políčko a částku, pak se kolo roztočí samo.",
+                    "round": r, "open_modal": False, "changed": True}
         if parts[0] in ("toc", "toč", "spin"):
             e = eng.spin(p, force=parts[1] if len(parts) > 1 else None)
             return {"text": f"Kolo se točí → *{e['title']}* v {_hm(e['start_at'])}. Tvůj kód: `{e['code']}` (/kolo potvrdit).",
@@ -42,7 +75,8 @@ def handle_command(eng, user_id, text):
             return {"text": "", "open_modal": True}
         if arg in ("prikaz", "příkaz", "command"):
             q = eng.use_command(p)
-            return {"text": f"⚡ *{q['label']}* spuštěno na 2 minuty.", "seq": q, "open_modal": False}
+            fx = " ".join(r["text"] for r in q.get("effects", []) if r.get("ok"))
+            return {"text": f"⚡ *{q['label']}* spuštěno na 2 minuty. {fx}".strip(), "seq": q, "open_modal": False}
         if arg in ("stav", "status"):
             e = eng.active_event(); cd = eng.cooldown_left(p)
             return {"text": status_text(eng, p, e, cd), "open_modal": False}
@@ -56,6 +90,10 @@ STATE_HUMAN = {"pending": "⏳ čeká na potvrzení", "ready": "✅ připraveno"
 def status_text(eng, p, e, cd):
     name = lambda k: eng.cfg["players"].get(k, {}).get("name", k)
     cmd = "⚡ Tvůj nabitý příkaz: " + ("připraven" if cd <= 0 else f"nabije se za {max(1, int(cd // 60))} min")
+    cmd += f"\n🪙 Tvůj zůstatek: {_pts(eng.eco.balance(p))}"
+    r = eng.round()
+    if r and not e:
+        return f"🎡 *Stav kola:* 💰 běží sázky do {time.strftime('%H:%M:%S', time.localtime(r['closes_at']))}\n" + cmd
     if not e:
         return "🎡 *Stav kola*\nKolo je volné – můžeš točit.\n" + cmd
     lines = [f"🎡 *Stav kola:* {STATE_HUMAN.get(e['state'], e['state'])}", f"*{e['title']}* · start v {_hm(e['start_at'])}"]
@@ -110,12 +148,18 @@ def _permalink(resp):
     f = (resp.get("file") if hasattr(resp, "get") else None) or ((resp.get("files") or [{}])[0] if hasattr(resp, "get") else {})
     return (f or {}).get("permalink") or (f or {}).get("url_private")
 
-def make_poster(eng, client, channel, sync=None, pnl=None):
-    """notify(kind, obj): channel messages + spin GIF in thread + result PNG embedded in the live canvas.
+def make_poster(eng, client, channel, sync=None, pnl=None, scenes=None):
+    """notify(kind, obj): re-render panel/canvas; the only wheel-bot channel message is the 5-min alarm.
+    live -> persona scene starts (scenes.SceneRunner); persona_line -> one persona line (charged-command effect).
     Every Slack error is logged by code (missing_scope, not_in_channel, ...) and swallowed."""
     def post(kind, obj):
         if sync: sync.request()
         if pnl: pnl.request()
+        if scenes is not None:
+            try:
+                if kind == "live": scenes.start(obj)
+                elif kind == "persona_line": scenes.interject(obj)
+            except Exception as e: log.warning("scene %s failed: %s", kind, type(e).__name__)
         if kind != "alarm" or not channel: return
         mentions = " ".join(panel.who(eng, k) for k in eng.cfg["players"])
         try: client.chat_postMessage(channel=channel, text=f"⏰ {mentions} Za 5 minut začíná *{obj['title']}*! 🎡 Panel kola je výš ⬆️")
@@ -136,7 +180,10 @@ def handle_action(eng, client, body, post=None, pnl=None):
     user = (body.get("user") or {}).get("id"); ch = (body.get("channel") or {}).get("id") or (pnl.channel if pnl else None)
     arg = panel.action_arg(action)
     if not arg: return None
-    r = handle_command(eng, user, arg)
+    pick = None
+    try: pick = body["state"]["values"]["kolo_bets"]["kolo_bet_pick"]["selected_option"]["value"]
+    except (KeyError, TypeError): pass
+    r = handle_command(eng, user, arg, pick=pick)
     try:
         if r.get("open_modal"):
             client.views_open(trigger_id=body["trigger_id"], view=modal_view(eng.active_event()))
@@ -147,8 +194,43 @@ def handle_action(eng, client, body, post=None, pnl=None):
     if post:
         if r.get("spin"): post("spin", r["spin"])
         if r.get("seq"): post("seq_start", r["seq"])
+        if r.get("round"): post("bets_open", r["round"])
     if pnl: pnl.request()
     return r
+
+def on_reaction(eng, pnl, scenes, channel, event, delta):
+    """Hype meter: reactions on the panel or on the live scene's messages (needs reactions:read + events)."""
+    item = event.get("item") or {}
+    if item.get("type") != "message" or item.get("channel") != channel: return False
+    ts = item.get("ts"); tracked = {eng.store.kv_get("panel_ts")} | (scenes.tracked_ts() if scenes else set())
+    if ts not in tracked: return False
+    ok = eng.hype(delta)
+    if ok and pnl: pnl.request()
+    return ok
+
+def granted_scopes(client):
+    """Bot scopes from the x-oauth-scopes header of auth.test (names only)."""
+    try:
+        r = client.auth_test(); h = getattr(r, "headers", {}) or {}
+        raw = h.get("x-oauth-scopes") or h.get("X-OAuth-Scopes") or ""
+        return {x.strip() for x in raw.split(",") if x.strip()}
+    except Exception as e:
+        log.warning("auth.test failed: %s", _code(e)); return set()
+
+def make_scenes(eng, wheel_client, channel, scopes):
+    """Persona poster (solo persona bot tokens, Web API only) + scene runner with the bridge's LLM path."""
+    from .. import core
+    try: ccfg = core.load_config()
+    except Exception as e: log.warning("oku_slack config unreadable: %s", type(e).__name__); ccfg = {"personas": {}}
+    cache = {}
+    def prompt_fn(k):
+        if k not in ccfg.get("personas", {}): return None
+        if k not in cache: cache[k] = core.build_prompt(ccfg["personas"][k])
+        return cache[k]
+    poster = personas.PersonaPoster(wheel_client, channel, token_fn=env_token, customize="chat:write.customize" in scopes,
+                                    icon_base=ccfg.get("icon_base_url", ""))
+    log.info("persona bots available: %s; wheel name override: %s", ",".join(poster.available()) or "none", poster.customize)
+    return _scenes.SceneRunner(eng, poster, gen=core.generate, prompt_fn=prompt_fn)
 
 def start(eng):
     """Connect the dedicated Kolo app over Socket Mode. Returns notify(kind, obj) for the room server."""
@@ -158,14 +240,27 @@ def start(eng):
     if not (bot and apptok): log.warning("Slack adapter disabled: SLACK_OKU_WHEEL_* not set"); return None
     app = App(token=bot); channel = eng.cfg["settings"].get("slack_channel")
 
+    scopes = granted_scopes(app.client)
+    for need in ("reactions:read", "chat:write.customize"):
+        if need not in scopes: log.warning("scope %s not granted yet: %s degraded", need, "hype meter" if need.startswith("reactions") else "Macinka/Monika name override")
     sync = canvas.CanvasSync(eng, app.client, channel, eng.store); sync.run()
     pnl = panel.Panel(eng, app.client, channel, eng.store, card_renderer=lambda e: card_png(eng, e)); pnl.run()
-    post = make_poster(eng, app.client, channel, sync, pnl)
+    try: scn = make_scenes(eng, app.client, channel, scopes)
+    except Exception as e: log.error("scenes disabled: %s", type(e).__name__); scn = None
+    post = make_poster(eng, app.client, channel, sync, pnl, scn)
+    a = eng.active_event()
+    if scn is not None and a and a["state"] == "live": scn.start(a)  # resume after restart
 
     import re as _re
-    @app.action(_re.compile(r"^kolo_(spin|confirm|command|status|more)$"))
+    @app.action(_re.compile(r"^kolo_"))
     def _act(ack, body, client):
         ack(); handle_action(eng, client, body, post, pnl)
+
+    @app.event("reaction_added")
+    def _ra(event): on_reaction(eng, pnl, scn, channel, event, +1)
+
+    @app.event("reaction_removed")
+    def _rr(event): on_reaction(eng, pnl, scn, channel, event, -1)
 
     @app.command("/kolo")
     def _kolo(ack, body, client):
@@ -177,8 +272,9 @@ def start(eng):
             if not pnl.post_new(): client.chat_postEphemeral(channel=body["channel_id"], user=body["user_id"],
                                                              text=f"Panel nejde poslat: {pnl.last_error} (je bot v kanálu?)")
             return
-        for k in ("spin", "seq"):
-            if r.get(k): post("spin" if k == "spin" else "seq_start", r[k])
+        for k, kind in (("spin", "spin"), ("seq", "seq_start"), ("round", "bets_open")):
+            if r.get(k): post(kind, r[k])
+        if r.get("changed"): pnl.request()
 
     @app.view(MODAL_ID)
     def _modal(ack, body, view):

@@ -4,6 +4,7 @@ Spin choreography (by server time since spin_at): drums -> spin GIF -> 'A je to.
 Static images: https://www.itzkore.cz/oku/kolo/img/ (deploy-wheel-room.ps1). The result card with the start
 time is rendered per event and uploaded via files_upload_v2 (slack_file image block); static card fallback."""
 import logging, os, re, threading, time
+from . import show as _show
 
 log = logging.getLogger("oku_wheel.panel")
 IMG_BASE = os.environ.get("OKU_WHEEL_IMG_BASE", "https://www.itzkore.cz/oku/kolo/img/")
@@ -11,7 +12,11 @@ DRUMS_S, SPIN_END_S, ALMOST_END_S = 1.2, 4.7, 6.2
 SOFT = {"not_in_channel", "channel_not_found", "missing_scope", "ratelimited", "is_archived", "restricted_action"}
 HOST_NAMES = {"babis": "Andrej Babiš", "alenka": "Alenka Hranolka", "bourak": "Filip Bourák Turek", "marty": "Marty Prchal",
               "peta": "Peťa Maci", "kalousek": "Kalousek", "monika": "Monika Babišová"}
-STATE_CZ = {"pending": "⏳ čeká na potvrzení", "ready": "✅ připraveno", "live": "🔴 běží", "done": "🏁 skončeno", "expired": "💤 propadlo"}
+STATE_CZ = {"pending": "⏳ čeká na potvrzení", "ready": "✅ připraveno", "live": "🔴 běží", "done": "🏁 skončeno", "expired": "💤 propadlo",
+            "vetoed": "🙅 vetováno"}
+BET_AMOUNTS = (50, 100, 250)
+BETTING_REFRESH_S = 5.0
+def _pts(n): return f"{int(n):,}".replace(",", "\u00a0") + " 🪙"
 
 def _err(e):
     r = getattr(e, "response", None)
@@ -22,8 +27,8 @@ def _hm(ts): return time.strftime("%H:%M", time.localtime(ts))
 def _date(ts, fmt="{time}"): return f"<!date^{int(ts)}^{fmt}|{_hm(ts)}>"
 def _t(s, n=2900): return s if len(s) <= n else s[: n - 1] + "…"
 
-def phase(e, now):
-    if not e or e["state"] in ("done", "expired"): return "idle"
+def phase(e, now, rnd=None):
+    if not e or e["state"] in ("done", "expired", "vetoed"): return "betting" if rnd else "idle"
     if e["state"] == "live": return "legend" if e.get("legendary") else "live"
     dt = now - e["spin_at"]
     if dt < DRUMS_S: return "drums"
@@ -36,7 +41,8 @@ def who(eng, k):
     return f"<@{sid}>" if re.fullmatch(r"[UW][A-Z0-9]{6,}", sid or "") else eng.cfg["players"][k]["name"]
 
 def image_block(e, ph, base=IMG_BASE, card=None):
-    if ph in ("idle", "drums"): url, title = base + "kolo.png", ("🥁 Bubny…" if ph == "drums" else "Kolo štěstí OKÚ")
+    if ph == "betting": url, title = base + "kolo.png", "💰 Sázky běží"
+    elif ph in ("idle", "drums"): url, title = base + "kolo.png", ("🥁 Bubny…" if ph == "drums" else "Kolo štěstí OKÚ")
     elif ph in ("spin", "almost"): url, title = f"{base}kolo-spin-{e['key']}.gif?v={e['id']}", ("🎡 Točí se…" if ph == "spin" else "A je to…")
     elif ph == "legend": url, title = base + "titanic.png", "🔴 PŘÍMÝ PŘENOS"
     else:
@@ -48,22 +54,27 @@ def image_block(e, ph, base=IMG_BASE, card=None):
 def blocks(eng, now=None, base=IMG_BASE, card=None):
     """Pure: Block Kit for the panel (<= 50 blocks, never the event code). Returns (blocks, phase)."""
     snap = eng.snapshot(); now = snap["now"] if now is None else now
-    e, players = snap["event"], eng.cfg["players"]; ph = phase(e, now)
+    e, players, rnd = snap["event"], eng.cfg["players"], snap.get("round"); ph = phase(e, now, rnd)
     h = (e or {}).get("host_say") or {}
-    if ph == "drums": line = "Bubny, prosím! Kolotoč se roztáčí…"
+    if ph == "betting":
+        pool = eng.cfg.get("host", {}).get("lines", {}).get("bets") or ["Sázky jsou otevřené!"]
+        line = pool[int(rnd["id"], 16) % len(pool)]
+    elif ph == "drums": line = "Bubny, prosím! Kolotoč se roztáčí…"
     elif ph in ("spin", "almost"): line = "Točí se, točí… držte si klobouky!" if ph == "spin" else "A je to… a je to…"
     elif ph == "idle" and (not e or e["state"] == "done"): line = "Nastupovat, kolotoč čeká! Kdo roztočí první?"
     else: line = h.get("text") or "Nastupovat, kolotoč čeká!"
     b = [{"type": "header", "text": {"type": "plain_text", "text": "🎡 OKÚ KOLO ŠTĚSTÍ"}},
          {"type": "context", "elements": [{"type": "mrkdwn", "text": _t(f"🎠 *Monika Babišová* · _{line}_", 2900)}]},
          image_block(e, ph, base, card)]
+    if ph == "betting": b += betting_blocks(eng, snap, rnd, now)
+    if ph in ("live", "legend"): b += show_blocks(eng, e, now)
     if ph == "legend":
         cin = e.get("cinematic") or {}
         if cin.get("data"):
             d = cin["data"]; cast = (e.get("script_data") or {}).get("cast", {})
             q = [f"> *{d['caption']}*", f"> _{d['direction']}_"] + [f"> *{cast.get(sp, sp)}:* {tx}" for sp, tx in d.get("lines", [])]
             b.append({"type": "section", "text": {"type": "mrkdwn", "text": _t("\n".join(q))}})
-    if e and ph in ("result", "live", "legend") or (e and e["state"] == "expired"):
+    if e and ph in ("result", "live", "legend") or (e and e["state"] in ("expired", "vetoed") and ph != "betting"):
         start = f"{_date(e['start_at'])} · {_date(e['start_at'], '{ago}')}" if e["state"] in ("pending", "ready") else STATE_CZ.get(e["state"], e["state"])
         conf = "\n".join(f"{'✅' if k in e['confirmed'] else '⏳'} {who(eng, k)}" for k in players)
         cds, seqs = [], []
@@ -80,6 +91,9 @@ def blocks(eng, now=None, base=IMG_BASE, card=None):
     elif not e or ph == "idle":
         cds = " · ".join((f"⚡ {p['name']}" if p["cooldown_left"] <= 0 else f"🔋 {p['name']} do {_date(now + p['cooldown_left'])}") for p in snap["players"].values())
         b.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f"Nabité příkazy: {cds}"}]})
+    if e and ph == "result" and e.get("bets_result"):
+        b.append({"type": "context", "elements": [{"type": "mrkdwn", "text": _t(bets_result_text(eng, e))}]})
+    b.append(leaderboard_block(snap))
     b.append({"type": "divider"})
     btns = [{"type": "button", "action_id": "kolo_spin", "style": "primary", "text": {"type": "plain_text", "text": "🎡 Točit"}}]
     if e and e["state"] == "pending" and ph == "result":
@@ -90,11 +104,70 @@ def blocks(eng, now=None, base=IMG_BASE, card=None):
     b.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f"OKÚ Kolo · aktualizováno {_date(now)}"}]})
     return b, ph
 
+def leaderboard_block(snap):
+    medals = ["🥇", "🥈", "🥉", "4.", "5."]
+    rows = " · ".join(f"{medals[i]} {r['name']} *{_pts(r['points'])}*" for i, r in enumerate(snap.get("board", [])[:5]))
+    return {"type": "context", "elements": [{"type": "mrkdwn", "text": _t(f"🏆 Žebříček OKÚ korun: {rows or '—'}")}]}
+
+def bets_result_text(eng, e):
+    name = lambda k: eng.cfg["players"].get(k, {}).get("name", k)
+    parts = [f"{name(r['player'])} +{_pts(r['payout'])} 🎉" if r["state"] == "won" else f"{name(r['player'])} −{_pts(r['amount'])}"
+             for r in e.get("bets_result", [])]
+    return "💰 Sázky: " + " · ".join(parts)
+
+def betting_blocks(eng, snap, rnd, now):
+    """Countdown + bets so far + segment select + amount buttons (50/100/250/all-in)."""
+    left = max(0, int(round(rnd["closes_at"] - now)))
+    name = lambda k: eng.cfg["players"].get(k, {}).get("name", k)
+    titles = {x["key"]: x["title"] for x in eng.cfg["events"]}; odds = snap.get("odds", {})
+    bets = "\n".join(f"• {name(x['player'])}: {_pts(x['amount'])} na *{titles.get(x['key'], x['key'])}* (×{x['odds']})" for x in snap.get("bets", []))
+    txt = f"💰 *Sázky jsou otevřené!* Kolo se roztočí za *{left} s* ({_date(rnd['closes_at'], '{time_secs}')}).\n" + (bets or "_Zatím nikdo nevsadil._")
+    opts = [{"text": {"type": "plain_text", "text": _t(f"{x['title']} ×{odds.get(x['key'], 0)}", 75)}, "value": x["key"]}
+            for x in eng.cfg["events"] if odds.get(x["key"], 0) > 0][:100]
+    el = [{"type": "static_select", "action_id": "kolo_bet_pick", "placeholder": {"type": "plain_text", "text": "Vyber políčko"}, "options": opts}]
+    el += [{"type": "button", "action_id": f"kolo_bet_{a}", "value": str(a), "text": {"type": "plain_text", "text": f"💰 {a}"}} for a in BET_AMOUNTS]
+    el.append({"type": "button", "action_id": "kolo_bet_all", "value": "all", "style": "danger", "text": {"type": "plain_text", "text": "💥 All-in"}})
+    return [{"type": "section", "text": {"type": "mrkdwn", "text": _t(txt)}}, {"type": "actions", "block_id": "kolo_bets", "elements": el}]
+
+def show_blocks(eng, e, now):
+    """Live show: scene pointer + hype meter, poll, 'Chyť dotaci' minigame, OKÚ quiz."""
+    sh = e.get("show") or {}; out = []
+    name = lambda k: eng.cfg["players"].get(k, {}).get("name", k)
+    hype = sh.get("hype", 0)
+    out.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f"🎭 Scéna běží v kanálu, repliky postav ve vlákně · 🔥 Hype {_show.bar(hype)} {hype}"}]})
+    poll = sh.get("poll")
+    if poll:
+        votes = list(poll["votes"].values())
+        res = " · ".join(f"{o} *{votes.count(i)}*" for i, o in enumerate(poll["options"]))
+        out.append({"type": "section", "text": {"type": "mrkdwn", "text": _t(f"📊 *{poll['q']}*  {res}")}})
+        out.append({"type": "actions", "block_id": "kolo_poll", "elements": [
+            {"type": "button", "action_id": f"kolo_poll_{i}", "value": str(i), "text": {"type": "plain_text", "text": _t(o, 75)}} for i, o in enumerate(poll["options"])]})
+    c = sh.get("catch") or {}
+    if c.get("open"):
+        out.append({"type": "section", "text": {"type": "mrkdwn", "text": f"💸 *Chyť dotaci!* První bere {_pts(eng.s['points_catch'])} · do {_date(c['until'], '{time_secs}')}"},
+                    "accessory": {"type": "button", "action_id": "kolo_catch", "style": "primary", "text": {"type": "plain_text", "text": "💸 Chytit!"}}})
+    elif c.get("winner"):
+        out.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f"💸 Dotaci chytil(a) *{name(c['winner'])}* (+{_pts(eng.s['points_catch'])})"}]})
+    q = sh.get("quiz") or {}
+    if q.get("open"):
+        out.append({"type": "section", "text": {"type": "mrkdwn", "text": _t(f"🧠 *Kvíz:* {q['q']} · správně = +{_pts(eng.s['points_quiz'])} · do {_date(q['until'], '{time_secs}')}")}})
+        out.append({"type": "actions", "block_id": "kolo_quiz", "elements": [
+            {"type": "button", "action_id": f"kolo_quiz_{i}", "value": str(i), "text": {"type": "plain_text", "text": _t(o, 75)}} for i, o in enumerate(q["options"])]})
+    elif q and q.get("answers") and now >= q["until"]:
+        ok = [name(p) for p, a in q["answers"].items() if a == q["answer"]]
+        out.append({"type": "context", "elements": [{"type": "mrkdwn", "text": _t(f"🧠 Správně: *{q['options'][q['answer']]}* · trefili: {', '.join(ok) or 'nikdo'}")}]})
+    return out
+
 ACTIONS = {"kolo_spin": "toc", "kolo_confirm": "potvrdit", "kolo_command": "prikaz", "kolo_status": "stav"}
 
 def action_arg(action):
-    aid = action.get("action_id")
+    aid = action.get("action_id") or ""
     if aid == "kolo_more": return (action.get("selected_option") or {}).get("value")
+    if aid == "kolo_bet_pick": return "pick " + ((action.get("selected_option") or {}).get("value") or "")
+    if aid.startswith("kolo_bet_"): return "bet " + aid[len("kolo_bet_"):]
+    if aid.startswith("kolo_poll_"): return "poll " + aid[len("kolo_poll_"):]
+    if aid.startswith("kolo_quiz_"): return "quiz " + aid[len("kolo_quiz_"):]
+    if aid == "kolo_catch": return "catch"
     return ACTIONS.get(aid)
 
 def fallback_text(eng):
@@ -134,7 +207,7 @@ class Panel:
             log.warning("result card upload failed: %s (static card)", _err(ex)); self.card_failed.add(e["id"]); return None
 
     def _render(self, now):
-        e = self.eng.snapshot()["event"]; ph = phase(e, now)
+        e = self.eng.snapshot()["event"]; ph = phase(e, now, self.eng.round())
         return blocks(self.eng, now, self.base, self._card(e, ph)), e
 
     def post_new(self):
@@ -153,8 +226,9 @@ class Panel:
         ch, ts = self.where()
         if not ts: return bool(self.post_new())
         with self.lock:
-            if phase(self.eng.snapshot()["event"], now) != self.last_phase: self.dirty = True  # choreography step
-            due = self.dirty or now - self.last >= self.refresh_s
+            ph = phase(self.eng.snapshot()["event"], now, self.eng.round())
+            if ph != self.last_phase: self.dirty = True  # choreography step
+            due = self.dirty or now - self.last >= (BETTING_REFRESH_S if ph == "betting" else self.refresh_s)
             if not due or (now - self.last < self.min_interval and not force): return False
             (bl, ph), e = self._render(now)
             try: self.client.chat_update(channel=ch, ts=ts, text=fallback_text(self.eng), blocks=bl)

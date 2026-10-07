@@ -94,6 +94,7 @@ def test_legend_mode_live_broadcast():
 def test_actions_overflow_modal_with_code_and_cooldown():
     e, st, clk, sl, p = mk(); posted = []
     def body(a, **x): return {"actions": [dict(action_id=a, **x)], "user": {"id": "U0C6XAN3EG3"}, "channel": {"id": "C0C6W8E6NP9"}, "trigger_id": "T1"}
+    e.s["bet_window_s"] = 0  # direct spin (betting window covered in test_wheel_v2)
     r = SA.handle_action(e, sl, body("kolo_spin"), post=lambda k, o: posted.append(k), pnl=p)
     assert r["spin"] and sl.names()[-1] == "ephemeral"
     SA.handle_action(e, sl, body("kolo_spin"), pnl=p); assert "Kolo je obsazené: čeká se na potvrzení" in sl.calls[-1][1]["text"]  # busy -> ephemeral

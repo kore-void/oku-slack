@@ -78,7 +78,8 @@ def test_cooldown_30min_persisted(tmp_path):
     clk.adv(1); e2.use_command("kore")
 
 def test_sequence_2min_server_timed(env):
-    e, clk = env; q = e.use_command("kore")
+    e, clk = env; e.cfg["players"]["kore"]["command_effects"] = []  # plain sequence (effects: test_wheel_v2)
+    q = e.use_command("kore")
     assert q["end_at"] - q["start_at"] == 120
     clk.adv(30); assert K(e.tick()) == ["seq_step"]
     clk.adv(89); e.tick(); clk.adv(1); assert ("seq_done" in K(e.tick()))
@@ -97,6 +98,7 @@ def test_slack_command_flow(env):
     e, _ = env
     assert "Nejsi" in SA.handle_command(e, "UNOBODY", "")["text"]
     assert SA.handle_command(e, "U0C6XAN3EG3", "")["panel"]
+    e.s["bet_window_s"] = 0  # direct spin (betting window covered in test_wheel_v2)
     r = SA.handle_command(e, "U0C6XAN3EG3", "toc"); ev = r["spin"]; assert ev["code"] in r["text"]
     assert SA.handle_command(e, "U0C6XAN3EG3", "potvrdit")["open_modal"]
     assert SA.handle_modal(e, "U0C6XAN3EG3", ev["id"], "nope") == {"code": "Špatný kód."}
