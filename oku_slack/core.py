@@ -80,25 +80,31 @@ def gemini_settings():
     model = os.environ.get("LLM_MODEL") or get("GEMINI_MODEL") or "gemini-2.5-flash"
     return keys, list(dict.fromkeys([model] + GEMINI_FALLBACK_MODELS))
 
-def gemini(system, history, post=requests.post):
-    """Model-major, key-minor (like Umbra): try best model on every key before degrading."""
+def gemini(system, history, post=requests.post, rounds=3, sleep=None):
+    """Model-major, key-minor (like Umbra): try best model on every key before degrading.
+    If everything is rate-limited, back off (exponential + jitter) and sweep again."""
+    import time, random
+    sleep = sleep or time.sleep
     keys, models = gemini_settings()
     if not keys: raise RuntimeError("no GEMINI_API_KEY(S)")
-    contents = [{"role": "model" if m["role"] == "assistant" else "user", "parts": [{"text": m["content"] or "…"}]} for m in history]
-    body = {"systemInstruction": {"parts": [{"text": system}]}, "contents": contents or [{"role": "user", "parts": [{"text": "…"}]}]}
+    contents = [{"role": "model" if m["role"] == "assistant" else "user", "parts": [{"text": m["content"] or "-"}]} for m in history]
+    body = {"systemInstruction": {"parts": [{"text": system}]}, "contents": contents or [{"role": "user", "parts": [{"text": "-"}]}]}
     last = None
-    for model in models:
-        for i, key in enumerate(keys):
-            r = post(GEMINI_URL.format(model=model), headers={"x-goog-api-key": key}, json=body, timeout=90)
-            if r.status_code in (429, 500, 503, 404):
-                log.warning("gemini %s key#%d -> %s", model, i, r.status_code); last = r.status_code
-                if r.status_code == 404: break
-                continue
-            r.raise_for_status()
-            parts = (r.json().get("candidates") or [{}])[0].get("content", {}).get("parts", [])
-            text = "".join(p.get("text", "") for p in parts).strip()
-            if text: return text
-            last = "empty"
+    for rnd in range(rounds):
+        if rnd: sleep(min(30, 3 * 2 ** rnd) + random.uniform(0, 2))
+        for model in models:
+            for i, key in enumerate(keys):
+                r = post(GEMINI_URL.format(model=model), headers={"x-goog-api-key": key}, json=body, timeout=90)
+                if r.status_code in (429, 500, 503, 404):
+                    log.warning("gemini %s key#%d -> %s", model, i, r.status_code); last = r.status_code
+                    if r.status_code == 404: break
+                    continue
+                r.raise_for_status()
+                parts = (r.json().get("candidates") or [{}])[0].get("content", {}).get("parts", [])
+                text = "".join(p.get("text", "") for p in parts).strip()
+                if text and text.strip(".\u2026 "): return text
+                last = "empty"
+        if last not in (429, 500, 503, "empty"): break
     raise RuntimeError(f"gemini exhausted ({last})")
 
 def generate(system, history):

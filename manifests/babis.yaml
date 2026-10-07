@@ -25,6 +25,8 @@ settings:
     bot_events:
       - app_mention
       - message.im
+      - message.channels
+      - message.groups
   interactivity:
     is_enabled: false
   org_deploy_enabled: false
