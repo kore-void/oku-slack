@@ -72,15 +72,6 @@ def test_canvas_markdown_contains_statuses():
     clk.t = e.active_event()["live_at"] + 215; md = canvas.markdown(e)
     assert "PŘÍMÝ PŘENOS" in md and "Ledovec na obzoru" in md and "Petr Macinka:" in md
 
-def test_poster_flow_spin_gif_in_thread_and_result_image_in_canvas():
-    e, st, clk = mk(); sl = FakeSlack(); cs = canvas.CanvasSync(e, sl, "C1", st, clock=clk)
-    post = SA.make_poster(e, sl, "C1", cs); ev = e.spin("kore", force="porada"); post("spin", ev)
-    up = [kw for n, kw in sl.calls if n == "upload"][0]
-    assert up["thread_ts"] == "111.222" and up["filename"].endswith(".gif")
-    clk.adv(7); post("reveal", dict(e.tick())["reveal"])
-    assert cs.image_url and cs.image_url.startswith("https://") and "![Kolo](" in canvas.markdown(e, cs.image_url)
-    sl.fail["post"] = "not_in_channel"; post("alarm", ev)  # logged, no exception
-
 def test_spin_gif_frames_size_and_final_frame():
     segs = [{"key": x["key"], "color": x["color"]} for x in config.load()["events"]]
     g = render.spin_gif(segs, 200.0, title="Porada")

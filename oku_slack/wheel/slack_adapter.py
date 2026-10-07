@@ -8,7 +8,7 @@ log = logging.getLogger("oku_wheel.slack")
 MODAL_ID = "kolo_confirm"
 HOSTS = {"monika": "Monika Babišová", "babis": "Andrej Babiš", "alenka": "Alenka", "bourak": "Bourák", "marty": "Marty", "peta": "Peťa", "kalousek": "Kalousek"}
 HELP = ("*/kolo* pošle ovládací panel · */kolo toc* roztočí kolo (*/kolo toc <klíč>* vynutí událost, pokud allow_force) · */kolo potvrdit* (modál s kódem) · */kolo prikaz* nabitý příkaz (1× za 30 min) · "
-        "*/kolo stav* · animace a chat v roomce: {url}")
+        "*/kolo stav*")
 
 def env_token(name):
     """Token from process env, else from the user registry (HKCU\\Environment) so a supervisor started
@@ -54,7 +54,7 @@ def handle_command(eng, user_id, text):
 def modal_view(e):
     return {"type": "modal", "callback_id": MODAL_ID, "private_metadata": e["id"],
             "title": {"type": "plain_text", "text": "Potvrdit účast"}, "submit": {"type": "plain_text", "text": "Potvrdit"},
-            "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": f"*{e['title']}* v {_hm(e['start_at'])}\nOpiš kód události (ze zprávy /kolo nebo z roomky)."}},
+            "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": f"*{e['title']}* v {_hm(e['start_at'])}\nPotvrzení je úmyslné: opiš kód *{e['code']}*."}},
                        {"type": "input", "block_id": "code", "label": {"type": "plain_text", "text": "Kód"},
                         "element": {"type": "plain_text_input", "action_id": "v", "max_length": 4}}]}
 
@@ -75,12 +75,12 @@ def notification(eng, kind, obj):
     host = HOSTS.get(obj.get("host", ""), "")
     if kind == "spin":
         tag = "🌟 LEGENDÁRNÍ " if obj.get("legendary") else ""
-        return f"{_host(obj)}🎡 {tag}Kolo se točí, výsledek v roomce: {room_url()} · potvrzení `/kolo potvrdit` nebo podržením"
+        return f"{_host(obj)}🎡 {tag}Kolo se točí! Potvrzení: tlačítko ✅ v panelu nebo `/kolo potvrdit`"
     if kind == "reveal": return f"{_host(obj)}🎯 *{obj['title']}* ({host}) v {_hm(obj['start_at'])}."
     if kind == "nag": return f"{_host(obj)}{mention()}"
     if kind == "alarm": return f"{_host(obj)}⏰ {mention()} za 5 minut *{obj['title']}*! Potvrzeno: {', '.join(obj['confirmed']) or 'nikdo'}."
-    if kind == "live" and obj.get("legendary"): return f"🔴 PŘÍMÝ PŘENOS: *{obj['title']}*. Titanic scéna právě začíná: {room_url()}"
-    if kind == "live": return f"🔴 *{obj['title']}* začíná. Roomka: {room_url()}"
+    if kind == "live" and obj.get("legendary"): return f"🔴 PŘÍMÝ PŘENOS: *{obj['title']}*. Titanic scéna právě začíná!"
+    if kind == "live": return f"🔴 *{obj['title']}* začíná!"
     if kind == "expired": return f"{_host(obj)}💤 *{obj['title']}* propadla, nepotvrdili všichni."
     if kind == "done": return f"✅ *{obj['title']}* skončila."
     if kind == "seq_start": return f"⚡ {eng.cfg['players'][obj['player']]['name']}: *{obj['label']}* (2 min)."
@@ -101,32 +101,25 @@ def make_poster(eng, client, channel, sync=None, pnl=None):
     def post(kind, obj):
         if sync: sync.request()
         if pnl: pnl.request()
-        text = notification(eng, kind, obj)
-        if not (text and channel): return
-        segs = eng.snapshot()["wheel"]
-        try:
-            if kind == "spin":
-                r = client.chat_postMessage(channel=channel, text=text)
-                ts = r.get("ts") if hasattr(r, "get") else None
-                gif = render.spin_gif(segs, obj["target_angle"], turns=obj.get("turns", 5), title=obj["title"])
-                client.files_upload_v2(channel=channel, thread_ts=ts, content=gif, filename="kolo-spin.gif", title="Kolo se točí")
-            elif kind == "reveal":
-                img = render.png(segs, obj["target_angle"], title=obj["title"])
-                r = client.files_upload_v2(channel=channel, content=img, filename="kolo.png", title=obj["title"], initial_comment=text)
-                if sync: sync.set_image(_permalink(r))
-            elif kind == "live" and obj.get("legendary"):
-                img = render.titanic_poster(eng.cfg["scripts"].get(obj.get("script")))
-                client.files_upload_v2(channel=channel, content=img, filename="titanic.png", title=obj["title"], initial_comment=text)
-            else: client.chat_postMessage(channel=channel, text=text)
-        except Exception as e:
-            log.warning("slack post %s failed: %s", kind, _code(e))
+        if kind != "alarm" or not channel: return
+        mentions = " ".join(panel.who(eng, k) for k in eng.cfg["players"])
+        try: client.chat_postMessage(channel=channel, text=f"⏰ {mentions} Za 5 minut začíná *{obj['title']}*! 🎡 Panel kola je výš ⬆️")
+        except Exception as e: log.warning("slack alarm failed: %s", _code(e))
     return post
+
+def card_png(eng, e):
+    """Per-event result card: title, host persona (repo avatar asset if present) and start time."""
+    from . import config as _cfg
+    av = _cfg.ROOT / "assets" / "avatars" / f"{e.get('host', '')}.png"
+    color = next((x.get("color", "#1d4f91") for x in eng.cfg["events"] if x["key"] == e["key"]), "#1d4f91")
+    return render.result_card(e["title"], panel.HOST_NAMES.get(e.get("host", ""), ""), f"Start {time.strftime('%H:%M', time.localtime(e['start_at']))}",
+                              color, av if av.exists() else None)
 
 def handle_action(eng, client, body, post=None, pnl=None):
     """Button press on the panel. Replies ephemerally; confirmation opens the code modal."""
-    act = (body.get("actions") or [{}])[0].get("action_id")
+    action = (body.get("actions") or [{}])[0]; act = action.get("action_id")
     user = (body.get("user") or {}).get("id"); ch = (body.get("channel") or {}).get("id") or (pnl.channel if pnl else None)
-    arg = panel.ACTIONS.get(act)
+    arg = panel.action_arg(action)
     if not arg: return None
     r = handle_command(eng, user, arg)
     try:
@@ -151,11 +144,11 @@ def start(eng):
     app = App(token=bot); channel = eng.cfg["settings"].get("slack_channel")
 
     sync = canvas.CanvasSync(eng, app.client, channel, eng.store); sync.run()
-    pnl = panel.Panel(eng, app.client, channel, eng.store); pnl.run()
+    pnl = panel.Panel(eng, app.client, channel, eng.store, card_renderer=lambda e: card_png(eng, e)); pnl.run()
     post = make_poster(eng, app.client, channel, sync, pnl)
 
     import re as _re
-    @app.action(_re.compile(r"^kolo_(spin|confirm|command|status)$"))
+    @app.action(_re.compile(r"^kolo_(spin|confirm|command|status|more)$"))
     def _act(ack, body, client):
         ack(); handle_action(eng, client, body, post, pnl)
 

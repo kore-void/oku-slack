@@ -1,86 +1,114 @@
-"""The main Slack experience: ONE persistent interactive Block Kit 'control panel' message in the wheel
-channel. Stored as kv panel_channel/panel_ts in SQLite; re-rendered (chat.update) on every state change,
-throttled. Images are static assets on https://www.itzkore.cz/oku/kolo/img/ (deploy-wheel-room.ps1):
-kolo.png (idle), kolo-spin-<key>.gif (spin, lands in the segment centre), kolo-<key>.png (result)."""
-import logging, os, threading, time
+"""The main Slack experience: ONE persistent interactive Block Kit 'show' message in the wheel channel.
+Stored as kv panel_channel/panel_ts in SQLite; re-rendered (chat.update, >= 1 s apart) on every state change.
+Spin choreography (by server time since spin_at): drums -> spin GIF -> 'A je to...' -> result card.
+Static images: https://www.itzkore.cz/oku/kolo/img/ (deploy-wheel-room.ps1). The result card with the start
+time is rendered per event and uploaded via files_upload_v2 (slack_file image block); static card fallback."""
+import logging, os, re, threading, time
 
 log = logging.getLogger("oku_wheel.panel")
 IMG_BASE = os.environ.get("OKU_WHEEL_IMG_BASE", "https://www.itzkore.cz/oku/kolo/img/")
-SPIN_SHOW_S = 3.5  # spin GIF is shown this long, then the result PNG
-ACTIONS = {"kolo_spin": "toc", "kolo_confirm": "potvrdit", "kolo_command": "prikaz", "kolo_status": "stav"}
-STATE_CZ = {"pending": "⏳ čeká na potvrzení", "ready": "✅ potvrzeno, čeká na start", "live": "🔴 běží",
-            "done": "🏁 skončila", "expired": "💤 propadla"}
+DRUMS_S, SPIN_END_S, ALMOST_END_S = 1.2, 4.7, 6.2
 SOFT = {"not_in_channel", "channel_not_found", "missing_scope", "ratelimited", "is_archived", "restricted_action"}
+HOST_NAMES = {"babis": "Andrej Babiš", "alenka": "Alenka Hranolka", "bourak": "Filip Bourák Turek", "marty": "Marty Prchal",
+              "peta": "Peťa Maci", "kalousek": "Kalousek", "monika": "Monika Babišová"}
+STATE_CZ = {"pending": "čeká na potvrzení", "ready": "všichni potvrdili", "live": "🔴 běží", "done": "skončila", "expired": "💤 propadla"}
 
 def _err(e):
     r = getattr(e, "response", None)
     try: return r["error"]
     except Exception: return type(e).__name__
 
-def _date(ts, fmt="{time}"):
-    return f"<!date^{int(ts)}^{fmt}|{time.strftime('%H:%M', time.localtime(ts))}>"
-
-def image_for(e, now, base=IMG_BASE):
-    """(url, alt, kind). Spin GIF for SPIN_SHOW_S after spin_at, then the result; idle wheel without an event."""
-    if not e or e["state"] in ("done", "expired"): return base + "kolo.png", "Kolo štěstí OKÚ", "idle"
-    if e.get("legendary") and e["state"] == "live": return base + "titanic.png", "Titanic scéna", "poster"
-    if now < e["spin_at"] + SPIN_SHOW_S: return f"{base}kolo-spin-{e['key']}.gif?v={e['id']}", "Kolo se točí", "spin"
-    return f"{base}kolo-{e['key']}.png?v={e['id']}", f"Výsledek: {e['title']}", "result"
-
+def _hm(ts): return time.strftime("%H:%M", time.localtime(ts))
+def _date(ts, fmt="{time}"): return f"<!date^{int(ts)}^{fmt}|{_hm(ts)}>"
 def _t(s, n=2900): return s if len(s) <= n else s[: n - 1] + "…"
 
-def blocks(eng, now=None, base=IMG_BASE):
-    """Pure: Block Kit for the panel. Never contains the event code."""
+def phase(e, now):
+    if not e or e["state"] in ("done", "expired"): return "idle"
+    if e["state"] == "live": return "legend" if e.get("legendary") else "live"
+    dt = now - e["spin_at"]
+    if dt < DRUMS_S: return "drums"
+    if dt < SPIN_END_S: return "spin"
+    if dt < ALMOST_END_S: return "almost"
+    return "result"
+
+def who(eng, k):
+    sid = eng.cfg["players"][k].get("slack_id", "")
+    return f"<@{sid}>" if re.fullmatch(r"[UW][A-Z0-9]{6,}", sid or "") else eng.cfg["players"][k]["name"]
+
+def image_block(e, ph, base=IMG_BASE, card=None):
+    if ph in ("idle", "drums"): url, title = base + "kolo.png", ("🥁 Bubny…" if ph == "drums" else "Kolo štěstí OKÚ")
+    elif ph in ("spin", "almost"): url, title = f"{base}kolo-spin-{e['key']}.gif?v={e['id']}", ("🎡 Točí se…" if ph == "spin" else "A je to…")
+    elif ph == "legend": url, title = base + "titanic.png", "🔴 PŘÍMÝ PŘENOS"
+    else:
+        title = e["title"]
+        if card: return {"type": "image", "slack_file": {"id": card}, "alt_text": title, "title": {"type": "plain_text", "text": title[:2000]}}
+        url = f"{base}card-{e['key']}.png?v={e['id']}"
+    return {"type": "image", "image_url": url, "alt_text": title, "title": {"type": "plain_text", "text": title[:2000]}}
+
+def blocks(eng, now=None, base=IMG_BASE, card=None):
+    """Pure: Block Kit for the panel (<= 50 blocks, never the event code). Returns (blocks, phase)."""
     snap = eng.snapshot(); now = snap["now"] if now is None else now
-    e, players = snap["event"], eng.cfg["players"]
-    url, alt, kind = image_for(e, now, base)
-    b = [{"type": "header", "text": {"type": "plain_text", "text": "🎡 OKÚ Kolo štěstí"}},
-         {"type": "image", "image_url": url, "alt_text": alt}]
+    e, players = snap["event"], eng.cfg["players"]; ph = phase(e, now)
     h = (e or {}).get("host_say") or {}
-    host = h.get("text") or "Nastupovat, kolotoč čeká! Kdo roztočí první?"
-    b.append({"type": "section", "text": {"type": "mrkdwn", "text": _t(f"🎠 *{h.get('name', 'Monika Babišová')}:* {host}")}})
-    if e and kind != "spin":
-        tag = "🌟 *LEGENDÁRNÍ* · " if e.get("legendary") else ""
-        when = f"start {_date(e['start_at'])}"
-        if e["state"] in ("pending", "ready") and e["start_at"] > now: when += f" (za ~{max(1, int((e['start_at'] - now) // 60))} min)"
-        b.append({"type": "section", "text": {"type": "mrkdwn", "text": _t(f"{tag}*{e['title']}*\n{STATE_CZ.get(e['state'], e['state'])} · {when}")}})
-        conf = " · ".join(f"{p['name']} {'✅' if k in e['confirmed'] else '⏳'}" for k, p in players.items())
-        b.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f"Potvrzení: {conf}"}]})
+    if ph == "drums": line = "Bubny, prosím! Kolotoč se roztáčí…"
+    elif ph in ("spin", "almost"): line = "Točí se, točí… držte si klobouky!" if ph == "spin" else "A je to… a je to…"
+    elif ph == "idle" and (not e or e["state"] == "done"): line = "Nastupovat, kolotoč čeká! Kdo roztočí první?"
+    else: line = h.get("text") or "Nastupovat, kolotoč čeká!"
+    b = [{"type": "header", "text": {"type": "plain_text", "text": "🎡 OKÚ KOLO ŠTĚSTÍ"}},
+         {"type": "context", "elements": [{"type": "mrkdwn", "text": _t(f"🎠 *Monika Babišová* · _{line}_", 2900)}]},
+         image_block(e, ph, base, card)]
+    if ph == "legend":
         cin = e.get("cinematic") or {}
-        if cin.get("active") and cin.get("data"):
+        if cin.get("data"):
             d = cin["data"]; cast = (e.get("script_data") or {}).get("cast", {})
-            lines = "\n".join(f"*{cast.get(sp, sp)}:* {tx}" for sp, tx in d.get("lines", []))
-            b.append({"type": "section", "text": {"type": "mrkdwn", "text": _t(f"📺 *PŘÍMÝ PŘENOS · {d['caption']}*\n_{d['direction']}_\n{lines}")}})
-    elif kind == "spin":
-        b.append({"type": "section", "text": {"type": "mrkdwn", "text": "🎡 *Kolo se točí…*"}})
-    cds = []
-    for k, p in snap["players"].items():
-        left = p["cooldown_left"]
-        cds.append(f"{p['name']} _{players[k].get('command', 'příkaz')}_: " + ("⚡ připraven" if left <= 0 else f"🔋 nabíjí se do {_date(now + left)}"))
-    for q in snap["sequences"]:
-        st = [s for s in q["steps"] if now >= s["at"]]
-        cds.append(f"🔥 *{q['label']}* ({players[q['player']]['name']}): {st[-1]['text'] if st else ''} · do {_date(q['end_at'])}")
-    b.append({"type": "context", "elements": [{"type": "mrkdwn", "text": _t(" · ".join(cds), 2900)}]})
-    can_spin = not e or e["state"] in ("done", "expired")
-    btns = []
-    if can_spin: btns.append({"type": "button", "action_id": "kolo_spin", "style": "primary", "text": {"type": "plain_text", "text": "🎡 Točit"}})
-    if e and e["state"] == "pending":
+            q = [f"> *{d['caption']}*", f"> _{d['direction']}_"] + [f"> *{cast.get(sp, sp)}:* {tx}" for sp, tx in d.get("lines", [])]
+            b.append({"type": "section", "text": {"type": "mrkdwn", "text": _t("\n".join(q))}})
+    if e and ph in ("result", "live", "legend") or (e and e["state"] == "expired"):
+        start = f"{_date(e['start_at'])} · {_date(e['start_at'], '{ago}')}" if e["state"] in ("pending", "ready") else STATE_CZ.get(e["state"], e["state"])
+        conf = "\n".join(f"{'✅' if k in e['confirmed'] else '⏳'} {who(eng, k)}" for k in players)
+        cds, seqs = [], []
+        for k, p in snap["players"].items():
+            cds.append(f"⚡ {p['name']} připraven" if p["cooldown_left"] <= 0 else f"🔋 {p['name']} do {_date(now + p['cooldown_left'])}")
+        for q in snap["sequences"]:
+            st = [s for s in q["steps"] if now >= s["at"]]
+            seqs.append(f"🔥 *{q['label']}* · {st[-1]['text'] if st else ''}")
+        b.append({"type": "section", "fields": [
+            {"type": "mrkdwn", "text": _t(f"*Start*\n{start}", 1900)},
+            {"type": "mrkdwn", "text": _t(f"*Potvrzení*\n{conf}", 1900)},
+            {"type": "mrkdwn", "text": _t("*Nabité příkazy*\n" + "\n".join(cds), 1900)},
+            {"type": "mrkdwn", "text": _t("*Sekvence*\n" + ("\n".join(seqs) or "—"), 1900)}]})
+    elif not e or ph == "idle":
+        cds = " · ".join((f"⚡ {p['name']}" if p["cooldown_left"] <= 0 else f"🔋 {p['name']} do {_date(now + p['cooldown_left'])}") for p in snap["players"].values())
+        b.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f"Nabité příkazy: {cds}"}]})
+    b.append({"type": "divider"})
+    btns = [{"type": "button", "action_id": "kolo_spin", "style": "primary", "text": {"type": "plain_text", "text": "🎡 Točit"}}]
+    if e and e["state"] == "pending" and ph == "result":
         btns.append({"type": "button", "action_id": "kolo_confirm", "style": "primary", "text": {"type": "plain_text", "text": "✅ Potvrdit účast"}})
-    btns += [{"type": "button", "action_id": "kolo_command", "text": {"type": "plain_text", "text": "⚡ Nabitý příkaz"}},
-             {"type": "button", "action_id": "kolo_status", "text": {"type": "plain_text", "text": "ℹ️ Stav"}}]
+    btns.append({"type": "button", "action_id": "kolo_command", "text": {"type": "plain_text", "text": "⚡ Nabitý příkaz"}})
+    btns.append({"type": "overflow", "action_id": "kolo_more", "options": [{"text": {"type": "plain_text", "text": "ℹ️ Stav"}, "value": "stav"}]})
     b.append({"type": "actions", "block_id": "kolo_actions", "elements": btns})
-    b.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f"Aktualizováno {_date(now)} · potvrzení jen kódem události (modál)"}]})
-    return b, kind
+    b.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f"OKÚ Kolo · aktualizováno {_date(now)}"}]})
+    return b, ph
+
+ACTIONS = {"kolo_spin": "toc", "kolo_confirm": "potvrdit", "kolo_command": "prikaz", "kolo_status": "stav"}
+
+def action_arg(action):
+    aid = action.get("action_id")
+    if aid == "kolo_more": return (action.get("selected_option") or {}).get("value")
+    return ACTIONS.get(aid)
 
 def fallback_text(eng):
     e = eng.active_event()
-    return f"OKÚ Kolo: {e['title']} ({e['state']})" if e else "OKÚ Kolo štěstí"
+    return f"OKÚ Kolo štěstí: {e['title']}" if e else "OKÚ Kolo štěstí"
 
 class Panel:
-    def __init__(self, eng, client, channel, store, clock=time.time, min_interval=2.0, refresh_s=60.0, retry_s=120.0, base=IMG_BASE):
+    def __init__(self, eng, client, channel, store, clock=time.time, min_interval=1.0, refresh_s=60.0, retry_s=120.0,
+                 base=IMG_BASE, card_renderer=None):
         self.eng, self.client, self.channel, self.store, self.clock, self.base = eng, client, channel, store, clock, base
         self.min_interval, self.refresh_s, self.retry_s = min_interval, refresh_s, retry_s
-        self.dirty, self.last, self.blocked_until, self.last_kind, self.last_error, self.updates = True, -1e18, 0.0, None, None, 0
+        self.card_renderer = card_renderer  # callable(event) -> PNG bytes; None = static card URL only
+        self.dirty, self.last, self.blocked_until, self.last_phase, self.last_error, self.updates = True, -1e18, 0.0, None, None, 0
+        self.cards, self.card_failed = {}, set()
         self.lock = threading.Lock()
 
     def request(self): self.dirty = True
@@ -95,16 +123,29 @@ class Panel:
         self.blocked_until = self.clock() + (self.retry_s if code in SOFT else self.min_interval)
         return None
 
+    def _card(self, e, ph):
+        if ph != "result" or not e or not self.card_renderer or e["id"] in self.card_failed: return None
+        if e["id"] in self.cards: return self.cards[e["id"]]
+        try:
+            r = self.client.files_upload_v2(content=self.card_renderer(e), filename=f"kolo-{e['id']}.png", title=e["title"])
+            f = r.get("file") or (r.get("files") or [{}])[0]
+            self.cards[e["id"]] = f.get("id"); return self.cards[e["id"]]
+        except Exception as ex:
+            log.warning("result card upload failed: %s (static card)", _err(ex)); self.card_failed.add(e["id"]); return None
+
+    def _render(self, now):
+        e = self.eng.snapshot()["event"]; ph = phase(e, now)
+        return blocks(self.eng, now, self.base, self._card(e, ph)), e
+
     def post_new(self):
-        """(Re-)post the panel message and remember it. Returns ts or None."""
+        """(Re-)post the panel and remember it. Returns ts or None."""
         with self.lock:
-            bl, kind = blocks(self.eng, self.clock(), self.base)
+            (bl, ph), _ = self._render(self.clock())
             try: r = self.client.chat_postMessage(channel=self.channel, text=fallback_text(self.eng), blocks=bl)
             except Exception as e: return self._fail("post", e)
-            ch, ts = r.get("channel", self.channel), r["ts"]
-            self.store.kv_set("panel_channel", ch); self.store.kv_set("panel_ts", ts)
-            self.dirty, self.last, self.last_kind, self.last_error = False, self.clock(), kind, None
-            self.updates += 1; log.info("panel posted"); return ts
+            self.store.kv_set("panel_channel", r.get("channel", self.channel)); self.store.kv_set("panel_ts", r["ts"])
+            self.dirty, self.last, self.last_phase, self.last_error = False, self.clock(), ph, None
+            self.updates += 1; log.info("panel posted"); return r["ts"]
 
     def flush(self, force=False):
         now = self.clock()
@@ -112,20 +153,21 @@ class Panel:
         ch, ts = self.where()
         if not ts: return bool(self.post_new())
         with self.lock:
-            e = self.eng.active_event() or None
-            want_kind = image_for(self.eng.snapshot()["event"], now, self.base)[2]
-            if want_kind != self.last_kind: self.dirty = True  # spin GIF -> result PNG switch
+            if phase(self.eng.snapshot()["event"], now) != self.last_phase: self.dirty = True  # choreography step
             due = self.dirty or now - self.last >= self.refresh_s
             if not due or (now - self.last < self.min_interval and not force): return False
-            bl, kind = blocks(self.eng, now, self.base)
+            (bl, ph), e = self._render(now)
             try: self.client.chat_update(channel=ch, ts=ts, text=fallback_text(self.eng), blocks=bl)
             except Exception as ex:
-                if _err(ex) in ("message_not_found", "cant_update_message"): self.store.kv_set("panel_ts", "")
+                code = _err(ex)
+                if code in ("message_not_found", "cant_update_message"): self.store.kv_set("panel_ts", "")
+                if code == "invalid_blocks" and e and e["id"] in self.cards:  # slack_file not accepted -> static card
+                    self.card_failed.add(e["id"]); self.cards.pop(e["id"], None)
                 self.dirty = True; return self._fail("update", ex)
-            self.dirty, self.last, self.last_kind, self.last_error = False, now, kind, None
+            self.dirty, self.last, self.last_phase, self.last_error = False, now, ph, None
             self.updates += 1; return True
 
-    def run(self, period=0.5):
+    def run(self, period=0.25):
         def loop():
             while True:
                 try: self.flush()

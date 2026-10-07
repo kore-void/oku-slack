@@ -1,37 +1,38 @@
 # Host announcer for the wheel: Monika Babišová as the funfair carousel hostess.
-# Placeholders: {title} event title, {who} player name, {time} HH:MM, {missing} players who did not confirm yet.
+# Short, punchy, no repeating the event title (the panel shows it big).
+# Placeholders: {who} spinner, {time} HH:MM, {missing} players who did not confirm yet.
 name = "Monika Babišová"
 role = "hostitelka kolotoče"
 
 [lines]
 spin = [
-  "Točí se, točí! Kdo nepotvrdí, ten nedoskočí! Roztáčí {who}!",
-  "Dámy a pánové, nastupovat, kolotoč OKÚ se rozjíždí! Pevně se držte, {who} točí!",
-  "Pozor, pozor, kolo štěstí jede! Andrej říká, že to bude dobrý, a já mu to věřím.",
-  "Lístky si nechte, dneska jezdíte zadarmo. Jako obědy pro důchodce!",
+  "Nastupovat, kolotoč jede! Točí {who}!",
+  "Bubny! Světla! {who} roztáčí kolo!",
+  "Držte si klobouky, tohle bude jízda!",
+  "Lístky nechte doma, dneska se jezdí zadarmo!",
 ]
 result = [
-  "A máme to! Padlo to na: {title}! Začínáme v {time}.",
-  "Kolo se zastavilo a ukazuje... {title}! Kdo nepřijde, ten neví, o co přišel.",
-  "Ta dam! {title}! Já bych si vzala to nejhezčí šaty, ale vy přijďte, jak chcete.",
-  "Zvoní zvoneček, výhra je jasná: {title}, v {time}!",
+  "Ta dam! Máme vítěze, lidičky!",
+  "Zvoneček cinkl a kolo rozhodlo!",
+  "No tohle! Andrej bude koukat!",
+  "Jackpot! Tak to se mi líbí!",
 ]
 alarm = [
-  "Ještě pět minut a jedeme! {title} se blíží, připravte se!",
-  "Pět minut, milánkové! {title} nečeká, kolotoč taky ne.",
-  "Haló haló, za pět minut {title}! Kdo nesedí, ať si sedne.",
+  "Pět minut, milánkové! Kolotoč se plní!",
+  "Za pět minut to vypukne, nikdo nechybí!",
+  "Pětiminutovka! Kdo nesedí, ať si sedne!",
 ]
 nag = [
-  "{missing}, no tak! Bez tebe se kolotoč nerozjede. Potvrď to!",
-  "Čekáme jen na {missing}. Andrej taky čeká a on nerad čeká.",
-  "{missing}, zlatíčko, podrž to tlačítko nebo napiš kód. Dvě vteřinky, víc nechci.",
+  "{missing}, no tak! Bez tebe se nejede!",
+  "Čekáme jen na {missing}. Andrej nerad čeká!",
+  "{missing}, zlatíčko, jeden kód a jedeme!",
 ]
 expiry = [
-  "Škoda, {title} propadla. Někdo nepotvrdil. Kolotoč jede dál!",
-  "No nic, {title} se nekoná. Příště všichni včas, ano?",
-  "Propadlo to, lidičky. Já už jsem měla nachystané balónky.",
+  "Škoda, propadlo to. Kolotoč jede dál!",
+  "Nic, příště všichni včas, ano?",
+  "Balónky splaskly. Zkusíme znovu?",
 ]
 legendary = [
-  "Tohle se nestává! Kolo padlo na LEGENDÁRNÍ políčko! {title}! Přímý přenos!",
-  "Zastavte všechno! Legendární událost: {title}! Takovou jízdu jsem ještě neuváděla!",
+  "Tohle se nestává! LEGENDÁRNÍ políčko! Přímý přenos!",
+  "Zastavte všechno! Legenda je tady!",
 ]

@@ -241,5 +241,62 @@ def render_assets(out_dir, segments, script=None):
         title = s.get("title") or label_of(s)
         (out / f"kolo-{s['key']}.png").write_bytes(png(segments, a, title=title))
         (out / f"kolo-spin-{s['key']}.gif").write_bytes(spin_gif(segments, a, title=title))
+        (out / f"card-{s['key']}.png").write_bytes(result_card(title, s.get("host_name", ""), "", s.get("color", "#1d4f91"), s.get("avatar")))
     (out / "titanic.png").write_bytes(titanic_poster(script))
     return sorted(p.name for p in out.iterdir())
+
+def _wrap(d, text, font, maxw):
+    words, lines, cur = text.split(), [], ""
+    for w in words:
+        t = (cur + " " + w).strip()
+        if d.textlength(t, font=font) > maxw and cur: lines.append(cur); cur = w
+        else: cur = t
+    return lines + ([cur] if cur else [])
+
+def result_card(title, host_name="", start_text="", color="#1d4f91", avatar_path=None, size=(800, 450), k=2, seed=7):
+    """Result card for the Slack panel: stage background, gold frame, confetti, big event title, host and start.
+    The host is shown only via an existing repo avatar asset (assets/avatars) or a neutral silhouette."""
+    import random as _r
+    W, H = size[0] * k, size[1] * k
+    img = _radial(max(W, H), _mix(_rgb(color), (60, 30, 90), 0.5), (6, 4, 12), power=0.7).crop((0, 0, W, H)).convert("RGBA")
+    glow = Image.new("L", (W, H), 0); ImageDraw.Draw(glow).ellipse([W * 0.15, -H * 0.4, W * 0.85, H * 0.7], fill=110)
+    img.alpha_composite(Image.merge("RGBA", (*Image.new("RGB", (W, H), (255, 220, 150)).split(), _blur(glow, W / 18))))
+    d = ImageDraw.Draw(img); rnd = _r.Random(seed)
+    for _ in range(140):  # confetti
+        x, y, s = rnd.uniform(0, W), rnd.uniform(0, H), rnd.uniform(6, 16) * k / 2
+        c = rnd.choice([(255, 214, 102), (215, 25, 40), (255, 255, 255), (17, 69, 126), (46, 204, 113)])
+        a = rnd.uniform(0, 3.14)
+        pts = [(x + s * math.cos(a + t), y + s * 0.5 * math.sin(a + t)) for t in (0, 1.6, 3.14, 4.7)]
+        d.polygon(pts, fill=c)
+    m = 18 * k  # gold frame with bulbs
+    for j in range(5):
+        d.rounded_rectangle([m + j * 2, m + j * 2, W - m - j * 2, H - m - j * 2], radius=28 * k, outline=_mix((140, 95, 15), (255, 225, 120), j / 4), width=2 * k)
+    for i in range(22):
+        t = i / 22; x = m + (W - 2 * m) * t
+        for y in (m + 3 * k, H - m - 3 * k):
+            d.ellipse([x - 5 * k, y - 5 * k, x + 5 * k, y + 5 * k], fill=(255, 245, 200) if i % 2 == 0 else (150, 110, 40))
+    d.text((W / 2, 70 * k), "VÝSLEDEK KOLA", font=_font(26 * k), fill=(255, 214, 102), anchor="mm", stroke_width=k, stroke_fill=(60, 20, 0))
+    f = _font(58 * k); lines = _wrap(d, title, f, W - 140 * k)
+    while len(lines) > 2: f = _font(f.size - 4 * k); lines = _wrap(d, title, f, W - 140 * k)
+    y0 = H * 0.38 - (len(lines) - 1) * f.size * 0.55
+    for i, ln in enumerate(lines):
+        d.text((W / 2, y0 + i * f.size * 1.1), ln, font=f, fill="white", anchor="mm", stroke_width=3 * k, stroke_fill=(70, 10, 20))
+    # host chip: avatar asset or silhouette
+    cy = H * 0.64; r = 38 * k; cx = W / 2 - (d.textlength(host_name, font=_font(28 * k)) / 2 + r + 10 * k) / 2 if host_name else W / 2
+    if host_name:
+        av = None
+        if avatar_path:
+            try: av = Image.open(avatar_path).convert("RGBA").resize((2 * r, 2 * r), Image.LANCZOS)
+            except OSError: av = None
+        ring = Image.new("L", (2 * r, 2 * r), 0); ImageDraw.Draw(ring).ellipse([0, 0, 2 * r - 1, 2 * r - 1], fill=255)
+        if av is None:
+            av = Image.new("RGBA", (2 * r, 2 * r), (40, 30, 60, 255)); ad = ImageDraw.Draw(av)
+            ad.ellipse([r * 0.6, r * 0.35, r * 1.4, r * 1.15], fill=(15, 15, 25)); ad.ellipse([r * 0.25, r * 1.2, r * 1.75, r * 2.6], fill=(15, 15, 25))
+        av.putalpha(ring); img.alpha_composite(av, (int(cx - r), int(cy - r)))
+        d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=(255, 214, 102), width=3 * k)
+        d.text((cx + r + 14 * k, cy), host_name, font=_font(28 * k), fill="white", anchor="lm")
+    if start_text:
+        d.rounded_rectangle([W / 2 - 150 * k, H - 100 * k, W / 2 + 150 * k, H - 58 * k], radius=18 * k, fill=(205, 25, 40), outline=(255, 214, 102), width=2 * k)
+        d.text((W / 2, H - 79 * k), start_text, font=_font(24 * k), fill="white", anchor="mm")
+    out = img.convert("RGB").resize(size, Image.LANCZOS)
+    b = io.BytesIO(); out.save(b, "PNG", optimize=True); return b.getvalue()
