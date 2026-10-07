@@ -11,7 +11,7 @@ if (-not (Test-Path $py)) {
     python -m venv .venv-wheel
     & $py -m pip install -q -r requirements-wheel.txt
 }
-if ($Test) { & $py -m pytest -q tests\test_wheel.py; exit $LASTEXITCODE }
+if ($Test) { & $py -m pytest -q -p no:cacheprovider --basetemp logs\pytest-tmp tests\test_wheel.py; exit $LASTEXITCODE }
 $env:OKU_WHEEL_PORT = "$Port"; $env:OKU_WHEEL_HOST = $BindHost
 if ($Slack) { $env:OKU_WHEEL_SLACK = "1" } else { Remove-Item Env:OKU_WHEEL_SLACK -ErrorAction SilentlyContinue }
 Write-Host "Room: http://${BindHost}:$Port/?p=kore&k=kore-local   (ICIK: ?p=icik&k=icik-local, spectator: no params)"
