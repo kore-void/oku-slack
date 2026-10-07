@@ -11,3 +11,5 @@ Optional env: `LLM_BASE_URL` (https://api.x.ai/v1), `LLM_MODEL` (grok-4), `OKU_C
 Run: `.venv\Scripts\python.exe -m oku_slack.bridge`   Tests: `.venv\Scripts\python.exe -m pytest -q`
 Avatars in `assets/avatars`; set `icon_base_url` only once they are hosted at a public https URL.
 
+
+Wheel of fortune + web room (separate service, own venv): see docs/WHEEL.md, run `.\scripts\run-wheel-room.ps1`.

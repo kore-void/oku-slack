@@ -1,0 +1,6 @@
+# Wheel room service (separate venv .venv-wheel so the live persona bridge venv stays untouched)
+aiohttp>=3.9
+pillow>=10
+slack_bolt>=1.18
+slack_sdk>=3.27
+pytest>=8

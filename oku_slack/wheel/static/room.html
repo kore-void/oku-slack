@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="cs"><head><meta charset="utf-8"><title>OKÚ roomka – kolo štěstí</title>
+<style>
+body{margin:0;font-family:Arial,sans-serif;background:#0f1a2b;color:#eee;display:flex;height:100vh}
+main{flex:1;display:flex;flex-direction:column;align-items:center;padding:16px;gap:10px;overflow:auto}
+aside{width:320px;background:#16233a;display:flex;flex-direction:column}
+#log{flex:1;overflow:auto;padding:8px;font-size:14px} #log b{color:#f1c40f}
+#chatf{display:flex} #chatf input{flex:1;padding:8px} button{padding:10px 16px;font-size:15px;border:0;border-radius:6px;cursor:pointer}
+#hold{background:#c0392b;color:#fff;position:relative;overflow:hidden;user-select:none;touch-action:none}
+#holdbar{position:absolute;left:0;top:0;bottom:0;width:0;background:rgba(255,255,255,.35)}
+#ev{font-size:20px;text-align:center} .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:center}
+#seq{font-size:22px;color:#f1c40f;min-height:28px} #err{color:#ff7675;min-height:18px}
+</style></head><body>
+<main>
+  <div id="ev">Připojuji…</div>
+  <canvas id="c" width="460" height="460"></canvas>
+  <div class="row"><button id="spin">Roztočit</button><button id="sound">🔊 Zapnout zvuk</button></div>
+  <div class="row" id="confirm"><input id="code" maxlength="4" size="5" placeholder="KÓD"><button id="sendcode">Potvrdit kódem</button>
+    <button id="hold"><span id="holdbar"></span>Podrž 2 s pro potvrzení</button></div>
+  <div class="row"><button id="cmd">⚡ Nabitý příkaz</button><span id="cd"></span></div>
+  <div id="seq"></div><div id="err"></div><div id="players"></div>
+</main>
+<aside><div id="log"></div><form id="chatf"><input id="msg" placeholder="Chat…" autocomplete="off"><button>➤</button></form></aside>
+<audio id="audio" preload="auto"></audio>
+<script>
+const q=new URLSearchParams(location.search), $=id=>document.getElementById(id);
+let S=null, offset=0, you=null, audioCtx=null, playingFor=null;
+const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws?p='+encodeURIComponent(q.get('p')||'')+'&k='+encodeURIComponent(q.get('k')||''));
+const send=o=>ws.send(JSON.stringify(o)), srvNow=()=>Date.now()/1000+offset;
+ws.onmessage=m=>{const d=JSON.parse(m.data);
+  if(d.type==='error'){$('err').textContent=d.msg;return} $('err').textContent='';
+  if(d.you!==undefined) you=d.you;
+  if(d.state){S=d.state; offset=S.now-Date.now()/1000}  // authoritative clock offset
+  if(d.type==='chat') log(`<b>${esc(d.payload.player)}</b>: ${esc(d.payload.text)}`);
+  else if(d.type==='hello') S.chat.forEach(c=>log(`<b>${esc(c.player)}</b>: ${esc(c.text)}`));
+  else if(d.type!=='seq_step') log(`<i>${d.type}</i>`);
+  renderUI();};
+ws.onclose=()=>{$('ev').textContent='Odpojeno – obnov stránku.'};
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function log(h){const l=$('log');l.insertAdjacentHTML('beforeend','<div>'+h+'</div>');l.scrollTop=1e9}
+function hm(t){return new Date(t*1000).toLocaleTimeString('cs-CZ',{hour:'2-digit',minute:'2-digit'})}
+// Deterministic spin: same server data + same server clock => same angle on every client.
+function wheelAngle(e){ if(!e) return 0; const T=S.settings.spin_ms/1000, t=Math.min(1,Math.max(0,(srvNow()-e.spin_at)/T));
+  const total=e.turns*360+e.target_angle; return total*(1-Math.pow(1-t,3)); }
+function draw(){ const c=$('c'),x=c.getContext('2d'),W=c.width,r=W/2-10; x.clearRect(0,0,W,W);
+  if(!S){requestAnimationFrame(draw);return} const n=S.wheel.length,seg=2*Math.PI/n,a=wheelAngle(S.event)*Math.PI/180;
+  x.save();x.translate(W/2,W/2);x.rotate(-a);
+  S.wheel.forEach((s,i)=>{x.beginPath();x.moveTo(0,0);x.arc(0,0,r,i*seg-Math.PI/2,(i+1)*seg-Math.PI/2);x.closePath();
+    x.fillStyle=s.color;x.fill();x.strokeStyle='#fff';x.lineWidth=2;x.stroke();
+    x.save();x.rotate((i+.5)*seg);x.fillStyle='#fff';x.font='bold 17px Arial';x.textAlign='center';x.fillText(s.key,0,-r*.62);x.restore();});
+  x.restore(); x.fillStyle='#e74c3c';x.beginPath();x.moveTo(W/2-14,2);x.lineTo(W/2+14,2);x.lineTo(W/2,36);x.fill();
+  tickUI(); requestAnimationFrame(draw);}
+function renderUI(){ if(!S) return; const e=S.event;
+  $('ev').innerHTML=e?`<b>${esc(e.title)}</b> – ${e.state} – start ${hm(e.start_at)}${e.code?` · kód <b>${e.code}</b>`:''}<br>potvrdili: ${Object.keys(e.confirmed).join(', ')||'nikdo'}`:'Žádná událost. Roztoč kolo!';
+  $('confirm').style.display=(e&&e.state==='pending'&&you&&!e.confirmed[you])?'flex':'none';
+  $('players').textContent=Object.entries(S.players).map(([k,v])=>v.name).join(' · ');}
+function tickUI(){ if(!S) return; const now=srvNow();
+  if(you){const left=Math.max(0,S.players[you].cooldown_left-(now-S.now)); $('cd').textContent=left>0?`nabíjí se ${Math.floor(left/60)}:${String(Math.floor(left%60)).padStart(2,'0')}`:'připraven'; $('cmd').disabled=left>0}
+  const sq=S.sequences.find(s=>now<s.end_at); if(sq){const st=sq.steps.filter(s=>now>=s.at).pop(); $('seq').textContent=`⚡ ${S.players[sq.player].name}: ${sq.label} – ${st?st.text:''} (${Math.ceil(sq.end_at-now)} s)`} else $('seq').textContent='';
+  const e=S.event; if(e&&e.state==='live'&&audioCtx&&playingFor!==e.id) startMusic(e, now-e.live_at);
+  if(e&&e.state==='live') $('ev').querySelector('b')&&($('ev').title=`běží ${Math.floor(now-e.live_at)} s`);}
+// Music: synced start offset. URL cue -> <audio>.currentTime; empty -> synthesized loop placed on the same server timeline.
+function startMusic(e,off){ playingFor=e.id;
+  if(e.music_url){const a=$('audio');a.src=e.music_url;a.currentTime=Math.max(0,off);a.play().catch(()=>{});return}
+  const notes=[262,330,392,523,392,330],beat=0.4,t0=audioCtx.currentTime-off%(notes.length*beat);
+  for(let k=0;k<Math.ceil(e.duration_s/beat);k++){const t=t0+k*beat; if(t<audioCtx.currentTime) continue;
+    const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.frequency.value=notes[k%notes.length];g.gain.setValueAtTime(.08,t);g.gain.exponentialRampToValueAtTime(.001,t+beat*.9);
+    o.connect(g).connect(audioCtx.destination);o.start(t);o.stop(t+beat);}}
+$('sound').onclick=()=>{audioCtx=audioCtx||new AudioContext();$('sound').textContent='🔊 zvuk zapnut'};
+$('spin').onclick=()=>send({type:'spin'});
+$('cmd').onclick=()=>send({type:'command'});
+$('sendcode').onclick=()=>send({type:'code',event_id:S.event.id,code:$('code').value});
+let holdT=null; const hb=$('holdbar');
+$('hold').onpointerdown=ev=>{ev.preventDefault();send({type:'hold_start',event_id:S.event.id});const t0=performance.now(),need=S.settings.hold_min_s*1000;
+  holdT=setInterval(()=>{hb.style.width=Math.min(100,(performance.now()-t0)/need*100)+'%'},50)};
+const holdEnd=()=>{if(holdT===null)return;clearInterval(holdT);holdT=null;hb.style.width='0';send({type:'hold_end',event_id:S.event.id})};
+$('hold').onpointerup=holdEnd;$('hold').onpointerleave=holdEnd;
+$('chatf').onsubmit=ev=>{ev.preventDefault();if($('msg').value){send({type:'chat',text:$('msg').value});$('msg').value=''}};
+requestAnimationFrame(draw);
+</script></body></html>

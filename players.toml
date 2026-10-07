@@ -1,0 +1,87 @@
+# Wheel of fortune: players + events. No secrets here.
+# room_key: per-player key used by the web room (?p=<id>&k=<room_key>). Change before exposing the room beyond localhost.
+
+[settings]
+cooldown_s = 1800        # charged command: once per 30 min per player
+sequence_s = 120         # charged command sequence length
+alarm_before_s = 300     # alarm 5 min before event start
+lead_s = 600             # spin -> event start (default 10 min)
+confirm_wait_s = 1800    # event expires if not all players confirmed within this after its start time
+hold_min_s = 2.0         # press-and-hold confirmation threshold
+spin_ms = 6000           # wheel spin animation length in the room
+slack_channel = "C0C6W8E6NP9"  # oku-porada: alarms/results
+
+[players.kore]
+name = "Kore"
+slack_id = "U0C6XAN3EG3"
+room_key = "kore-local"
+command = "Sorry jako"        # Kore's charged command label
+
+[players.icik]
+name = "ICIK"
+slack_id = "UICIK_PLACEHOLDER"   # [ASSUMPTION] real Slack id unknown; fill in
+room_key = "icik-local"
+command = "Kalousek za to může"
+
+[[events]]
+key = "porada"
+title = "Mimořádná porada OKÚ"
+host = "babis"
+weight = 3
+duration_s = 600
+color = "#1d4f91"
+music_url = ""   # empty = built-in synthesized cue (no licensing issue)
+
+[[events]]
+key = "tiskovka"
+title = "Tisková konference"
+host = "babis"
+weight = 2
+duration_s = 480
+color = "#c0392b"
+music_url = ""
+
+[[events]]
+key = "kantyna"
+title = "Alenka otevírá kantýnu"
+host = "alenka"
+weight = 2
+duration_s = 420
+color = "#f39c12"
+music_url = ""
+
+[[events]]
+key = "disko"
+title = "Peťa Maci disko"
+host = "peta"
+weight = 1
+duration_s = 600
+color = "#8e44ad"
+music_url = ""
+
+[[events]]
+key = "socky"
+title = "Marty: génius sociálních sítí"
+host = "marty"
+weight = 2
+duration_s = 360
+color = "#16a085"
+music_url = ""
+
+[[events]]
+key = "vina"
+title = "Kalousek: hledání viníka"
+host = "kalousek"
+weight = 1
+duration_s = 360
+color = "#2c3e50"
+music_url = ""
+
+[[events]]
+key = "bourak"
+title = "Bourák: zelená jízda"
+host = "bourak"
+weight = 1
+duration_s = 360
+color = "#27ae60"
+music_url = ""

@@ -1,0 +1,16 @@
+import os, pathlib, tomllib
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+DEFAULTS = dict(cooldown_s=1800, sequence_s=120, alarm_before_s=300, lead_s=600, confirm_wait_s=1800,
+                hold_min_s=2.0, spin_ms=6000, slack_channel="")
+
+def load(path=None):
+    path = pathlib.Path(path or os.environ.get("OKU_WHEEL_CONFIG") or ROOT / "players.toml")
+    with open(path, "rb") as f: raw = tomllib.load(f)
+    s = dict(DEFAULTS, **raw.get("settings", {}))
+    players = raw.get("players", {})
+    events = raw.get("events", [])
+    if not players: raise ValueError("players.toml: no players")
+    if not events: raise ValueError("players.toml: no events")
+    for e in events: e.setdefault("weight", 1); e.setdefault("duration_s", 600); e.setdefault("music_url", "")
+    return {"settings": s, "players": players, "events": events}
