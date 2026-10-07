@@ -35,8 +35,10 @@ def _radial(size, inner, outer, power=1.0):
     if power != 1.0: m = m.point(lambda v: int(255 * (v / 255) ** power))
     return Image.composite(Image.new("RGB", (size, size), outer), Image.new("RGB", (size, size), inner), m)
 
-def wheel_layer(segments, R):
-    """Rotatable wheel face (segments + labels + separators) of radius R, RGBA 2R x 2R, drawn at angle 0."""
+def wheel_layer(segments, R, view_angle=0.0):
+    """Rotatable wheel face (segments + labels + separators) of radius R, RGBA 2R x 2R, drawn at angle 0.
+    Labels are radial; a label that would end up on the left half once the wheel is rotated by view_angle is
+    flipped 180 deg so it stays readable."""
     D = 2 * R; n = len(segments); seg = 360 / n
     face = Image.new("RGBA", (D, D), (0, 0, 0, 0))
     for i, s in enumerate(segments):
@@ -57,7 +59,8 @@ def wheel_layer(segments, R):
         ImageDraw.Draw(t).text((w / 2, h / 2), txt, font=f, fill="white", anchor="mm",
                                stroke_width=max(1, fs // 9), stroke_fill=(30, 15, 10))
         mid = (i + 0.5) * seg
-        t = t.rotate(90 - mid, resample=Image.BICUBIC, expand=True)  # text baseline along the radius
+        flip = 180 if ((mid - view_angle) % 360) > 180 else 0  # left half on screen -> read inward, not upside down
+        t = t.rotate(90 - mid + flip, resample=Image.BICUBIC, expand=True)  # text baseline along the radius
         cx, cy = _pt(R, R, R * 0.62, mid)
         face.alpha_composite(t, (int(cx - t.width / 2), int(cy - t.height / 2)))
         fs = max(12, int(R * 0.105 * min(1.0, 8 / n) ** 0.5))
@@ -134,10 +137,10 @@ def _banner(img, title, S):
 
 class WheelRenderer:
     """Caches static layers so GIF frames only rotate the face. k = supersampling factor."""
-    def __init__(self, segments, size=800, k=2):
+    def __init__(self, segments, size=800, k=2, view_angle=0.0):
         self.N, self.k = size, k
         self.bg, (self.cx, self.cy, self.R) = stage(size, k)
-        self.face = wheel_layer(segments, self.R)
+        self.face = wheel_layer(segments, self.R, view_angle)
 
     def frame(self, angle, phase=0, title=None):
         img = self.bg.copy()
@@ -151,13 +154,13 @@ class WheelRenderer:
 
 def png(segments, angle=0.0, size=800, title=None, k=3):
     """High-quality still of the wheel stopped at `angle` (from engine.spin), k-times supersampled. PNG bytes."""
-    img = WheelRenderer(segments, size, k).frame(angle, 0, title)
+    img = WheelRenderer(segments, size, k, view_angle=angle).frame(angle, 0, title)
     b = io.BytesIO(); img.save(b, "PNG", optimize=True); return b.getvalue()
 
 def spin_gif(segments, target_angle, turns=5, frames=40, seconds=3.2, size=420, title=None, hold_ms=2200, k=2):
     """Animated spin: same geometry and ease-out as the room ((turns*360+target) * (1-(1-t)^3)).
     Marquee bulbs blink, last frame = exact result with banner held ~2 s. Adaptive palette per frame."""
-    wr = WheelRenderer(segments, size, k); total = turns * 360 + target_angle; out = []
+    wr = WheelRenderer(segments, size, k, view_angle=target_angle); total = turns * 360 + target_angle; out = []
     for i in range(frames):
         t = i / (frames - 1)
         a = target_angle if i == frames - 1 else (total * (1 - (1 - t) ** 3)) % 360

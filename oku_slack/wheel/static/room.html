@@ -27,6 +27,7 @@ aside{width:320px;background:#16233a;display:flex;flex-direction:column}
 <aside><div id="log"></div><form id="chatf"><input id="msg" placeholder="Chat…" autocomplete="off"><button>➤</button></form></aside>
 <audio id="audio" preload="auto"></audio>
 <script>
+const LABELS={porada:'Porada',tiskovka:'Tiskovka',kantyna:'Kantýna',disko:'Diskotéka',socky:'Sítě',vina:'Viník',bourak:'Zelená jízda',snemovna:'Sněmovna'};
 const q=new URLSearchParams(location.search), $=id=>document.getElementById(id);
 let S=null, offset=0, you=null, audioCtx=null, playingFor=null;
 const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws?p='+encodeURIComponent(q.get('p')||'')+'&k='+encodeURIComponent(q.get('k')||''));
@@ -51,7 +52,9 @@ function draw(){ const c=$('c'),x=c.getContext('2d'),W=c.width,r=W/2-10; x.clear
   x.save();x.translate(W/2,W/2);x.rotate(-a);
   S.wheel.forEach((s,i)=>{x.beginPath();x.moveTo(0,0);x.arc(0,0,r,i*seg-Math.PI/2,(i+1)*seg-Math.PI/2);x.closePath();
     x.fillStyle=s.color;x.fill();x.strokeStyle='#fff';x.lineWidth=2;x.stroke();
-    x.save();x.rotate((i+.5)*seg);x.fillStyle='#fff';x.font='bold 17px Arial';x.textAlign='center';x.fillText(s.key,0,-r*.62);x.restore();});
+    const mid=(i+.5)*seg, scr=((mid-a)%(2*Math.PI)+2*Math.PI)%(2*Math.PI);  // radial label, flipped on the left half
+    x.save();x.rotate(mid);x.translate(0,-r*.62);x.rotate(-Math.PI/2+(scr>Math.PI?Math.PI:0));x.fillStyle='#fff';x.strokeStyle='#1e0f0a';x.lineWidth=3;
+    x.font='bold 17px "Segoe UI",Arial';x.textAlign='center';x.textBaseline='middle';const lb=s.label||LABELS[s.key]||s.key;x.strokeText(lb,0,0);x.fillText(lb,0,0);x.restore();});
   x.restore(); x.fillStyle='#e74c3c';x.beginPath();x.moveTo(W/2-14,2);x.lineTo(W/2+14,2);x.lineTo(W/2,36);x.fill();
   tickUI(); drawCine(); requestAnimationFrame(draw);}
 // ---- Cinematic mode (legendary script). Beat = f(server time - live_at), identical on all clients. ----
