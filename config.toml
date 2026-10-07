@@ -1,9 +1,10 @@
-# OKÚ Slack satire team. Secrets are NEVER here: SLACK_OKU_BOT_TOKEN, SLACK_OKU_APP_TOKEN, LLM_API_KEY come from env.
+# OKÚ Slack satire team. Secrets are NEVER here: SLACK_OKU_<KEY>_BOT_TOKEN / _APP_TOKEN per persona (babis falls back to SLACK_OKU_BOT_TOKEN / SLACK_OKU_APP_TOKEN), LLM_API_KEY come from env.
 default_persona = "babis"
 history_limit = 20
 # icon_url must be a public https URL; empty = Slack app's default icon.
 icon_base_url = "https://raw.githubusercontent.com/kore-void/oku-slack/main/assets/avatars/"
 
+# channel_defaults: documentation only since solo bots (each app answers as itself).
 [channel_defaults]
 "C0C6W8E6NP9" = "babis"    # oku-porada
 "C0C75CZ2UCT" = "babis"    # oku-dotace-desk
@@ -48,6 +49,7 @@ name = "Kalousek (parodie)"
 dir = "kalousek"
 aliases = ["kalousek", "kalousku", "kalouska", "kalouskovi"]
 avatar = "kalousek.png"
-# Kalousek speaks only when blamed (see his prompt). Never default/routed normally.
+# Solo bots: Kalousek's own app answers direct mentions/DMs; blame_only/blame_patterns only matter for the
+# optional legacy blame follow-up (top-level blame_followup = true, off by default).
 blame_only = true
 blame_patterns = ["za to může", "může za to", "může za", "kvůli kalousk", "vina kalousk", "kalousek za", "zavinil", "kalousek to"]

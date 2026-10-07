@@ -1,3 +1,4 @@
+# LEGACY single-app manifest (pre solo bots). Use manifests/<key>.yaml instead.
 display_information:
   name: OKÚ
   description: Satirický tým OKÚ (parodie). Nejde o skutečné osoby.
