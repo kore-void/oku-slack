@@ -10,7 +10,17 @@ HOSTS = {"monika": "Monika Babišová", "babis": "Andrej Babiš", "alenka": "Ale
 HELP = ("*/kolo* roztočí kolo (*/kolo toc <klíč>* vynutí událost, pokud allow_force) · */kolo potvrdit* (modál s kódem) · */kolo prikaz* nabitý příkaz (1× za 30 min) · "
         "*/kolo stav* · animace a chat v roomce: {url}")
 
-def room_url(): return os.environ.get("OKU_WHEEL_PUBLIC_URL", "http://127.0.0.1:8787/")
+def env_token(name):
+    """Token from process env, else from the user registry (HKCU\\Environment) so a supervisor started
+    before setx still works without restarting it. Value is never logged."""
+    v = os.environ.get(name)
+    if v or os.name != "nt": return v
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as k: return winreg.QueryValueEx(k, name)[0] or None
+    except OSError: return None
+
+def room_url(): return os.environ.get("OKU_WHEEL_PUBLIC_URL", "http://127.0.0.1:8797/")
 
 def _hm(ts): return time.strftime("%H:%M", time.localtime(ts))
 
@@ -78,7 +88,7 @@ def start(eng):
     """Connect the dedicated Kolo app over Socket Mode. Returns notify(kind, obj) for the room server."""
     from slack_bolt import App
     from slack_bolt.adapter.socket_mode import SocketModeHandler
-    bot, apptok = os.environ.get("SLACK_OKU_WHEEL_BOT_TOKEN"), os.environ.get("SLACK_OKU_WHEEL_APP_TOKEN")
+    bot, apptok = env_token("SLACK_OKU_WHEEL_BOT_TOKEN"), env_token("SLACK_OKU_WHEEL_APP_TOKEN")
     if not (bot and apptok): log.warning("Slack adapter disabled: SLACK_OKU_WHEEL_* not set"); return None
     app = App(token=bot); channel = eng.cfg["settings"].get("slack_channel")
 

@@ -46,11 +46,11 @@ flowchart LR
 ## Run
 ```powershell
 cd C:\code\oku-slack
-.\scripts\run-wheel-room.ps1            # creates .venv-wheel on first run, opens http://127.0.0.1:8787/?p=kore&k=kore-local
+.\scripts\run-wheel-room.ps1            # creates .venv-wheel on first run, opens http://127.0.0.1:8797/?p=kore&k=kore-local
 .\scripts\run-wheel-room.ps1 -Test      # wheel tests
 .\scripts\run-wheel-room.ps1 -Slack     # also connect the OKÚ Kolo app (env SLACK_OKU_WHEEL_BOT_TOKEN / SLACK_OKU_WHEEL_APP_TOKEN)
 ```
-ICIK: `http://<host>:8787/?p=icik&k=icik-local`. Env: `OKU_WHEEL_CONFIG`, `OKU_WHEEL_DB`, `OKU_WHEEL_HOST`, `OKU_WHEEL_PORT`, `OKU_WHEEL_PUBLIC_URL` (link used in Slack messages).
+ICIK: `http://<host>:8797/?p=icik&k=icik-local`. Env: `OKU_WHEEL_CONFIG`, `OKU_WHEEL_DB`, `OKU_WHEEL_HOST`, `OKU_WHEEL_PORT`, `OKU_WHEEL_PUBLIC_URL` (link used in Slack messages).
 
 ## Slack
 `/kolo` spin (ephemeral reply with your code + wheel PNG posted to `slack_channel`), `/kolo potvrdit` (modal with code), `/kolo prikaz`, `/kolo stav`.

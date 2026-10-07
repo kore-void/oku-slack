@@ -1,7 +1,7 @@
-# Run the OKU wheel room locally: http://127.0.0.1:8787/?p=kore&k=kore-local
+# Run the OKU wheel room locally: http://127.0.0.1:8797/?p=kore&k=kore-local
 # -Slack connects the dedicated "OKU Kolo" app (needs SLACK_OKU_WHEEL_BOT_TOKEN / SLACK_OKU_WHEEL_APP_TOKEN in env).
 # -Test runs the wheel tests instead. Does NOT touch the Heimdall oku_slack service or its .venv.
-param([switch]$Slack, [switch]$Test, [int]$Port = 8787, [string]$BindHost = "127.0.0.1")
+param([switch]$Slack, [switch]$Test, [int]$Port = 8797, [string]$BindHost = "127.0.0.1")
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
 Set-Location $repo

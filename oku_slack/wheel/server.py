@@ -101,7 +101,7 @@ def main():
     if os.environ.get("OKU_WHEEL_SLACK") == "1":
         from . import slack_adapter
         notify = slack_adapter.start(eng)  # Socket Mode with the Babiš app tokens; registers /kolo
-    host, port = os.environ.get("OKU_WHEEL_HOST", "127.0.0.1"), int(os.environ.get("OKU_WHEEL_PORT", "8787"))
+    host, port = os.environ.get("OKU_WHEEL_HOST", "127.0.0.1"), int(os.environ.get("OKU_WHEEL_PORT", "8797"))
     web.run_app(make_app(eng, notify), host=host, port=port)
 
 if __name__ == "__main__": main()
