@@ -10,6 +10,8 @@ confirm_wait_s = 1800    # event expires if not all players confirmed within thi
 hold_min_s = 2.0         # press-and-hold confirmation threshold
 spin_ms = 6000           # wheel spin animation length in the room
 slack_channel = "C0C6W8E6NP9"  # oku-porada: alarms/results
+allow_force = true      # testing: allow forced spins (set false in production)
+nag_before_s = 120      # host nags missing players this long before start
 
 [players.kore]
 name = "Kore"
@@ -84,4 +86,18 @@ host = "bourak"
 weight = 1
 duration_s = 360
 color = "#27ae60"
+music_url = ""
+
+# LEGENDARY: rare event with a scripted cinematic scene (oku_slack/wheel/events/<script>.toml).
+# Tune `weight` (relative to the others above). Force for testing: /kolo toc snemovna, room "Vynutit legendu"
+# (only when settings.allow_force = true) or Engine.spin(force="snemovna").
+[[events]]
+key = "snemovna"
+title = "Mimořádná schůze sněmovny"
+host = "monika"
+legendary = true
+script = "titanic"
+weight = 0.15
+duration_s = 480
+color = "#d4af37"
 music_url = ""

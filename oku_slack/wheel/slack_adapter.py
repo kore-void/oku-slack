@@ -6,8 +6,8 @@ from . import engine, render
 
 log = logging.getLogger("oku_wheel.slack")
 MODAL_ID = "kolo_confirm"
-HOSTS = {"babis": "Andrej Babiš", "alenka": "Alenka", "bourak": "Bourák", "marty": "Marty", "peta": "Peťa", "kalousek": "Kalousek"}
-HELP = ("*/kolo* roztočí kolo · */kolo potvrdit* (modál s kódem) · */kolo prikaz* nabitý příkaz (1× za 30 min) · "
+HOSTS = {"monika": "Monika Babišová", "babis": "Andrej Babiš", "alenka": "Alenka", "bourak": "Bourák", "marty": "Marty", "peta": "Peťa", "kalousek": "Kalousek"}
+HELP = ("*/kolo* roztočí kolo (*/kolo toc <klíč>* vynutí událost, pokud allow_force) · */kolo potvrdit* (modál s kódem) · */kolo prikaz* nabitý příkaz (1× za 30 min) · "
         "*/kolo stav* · animace a chat v roomce: {url}")
 
 def room_url(): return os.environ.get("OKU_WHEEL_PUBLIC_URL", "http://127.0.0.1:8787/")
@@ -20,8 +20,9 @@ def handle_command(eng, user_id, text):
     if p is None: return {"text": "Nejsi v seznamu hráčů (players.toml).", "open_modal": False}
     arg = (text or "").strip().lower()
     try:
-        if arg in ("", "toc", "toč", "spin"):
-            e = eng.spin(p)
+        parts = arg.split()
+        if not parts or parts[0] in ("toc", "toč", "spin"):
+            e = eng.spin(p, force=parts[1] if len(parts) > 1 else None)
             return {"text": f"Kolo se točí → *{e['title']}* v {_hm(e['start_at'])}. Tvůj kód: `{e['code']}` (/kolo potvrdit).",
                     "spin": e, "open_modal": False}
         if arg in ("potvrdit", "confirm", "ano"):
@@ -52,14 +53,23 @@ def handle_modal(eng, user_id, event_id, code):
     try: eng.confirm_code(event_id, p, code); return None
     except engine.WheelError as err: return {"code": str(err)}
 
+def _host(obj):
+    h = obj.get("host_say") or {}
+    return f"🎠 *{h.get('name', 'Monika Babišová')}:* {h['text']}\n" if h.get("text") else ""
+
 def notification(eng, kind, obj):
     """Message text for a tick/room notification, or None if Slack stays quiet."""
     mention = lambda: " ".join(f"<@{v['slack_id']}>" for v in eng.cfg["players"].values())
     host = HOSTS.get(obj.get("host", ""), "")
-    if kind == "spin": return f"🎡 Kolo: *{obj['title']}* ({host}) v {_hm(obj['start_at'])}. Potvrďte všichni: `/kolo potvrdit` nebo podržením v roomce {room_url()}"
-    if kind == "alarm": return f"⏰ {mention()} za 5 minut *{obj['title']}*! Potvrzeno: {', '.join(obj['confirmed']) or 'nikdo'}."
+    if kind == "spin":
+        tag = "🌟 LEGENDÁRNÍ " if obj.get("legendary") else ""
+        return f"{_host(obj)}🎡 {tag}Kolo se točí, výsledek v roomce: {room_url()} · potvrzení `/kolo potvrdit` nebo podržením"
+    if kind == "reveal": return f"{_host(obj)}🎯 *{obj['title']}* ({host}) v {_hm(obj['start_at'])}."
+    if kind == "nag": return f"{_host(obj)}{mention()}"
+    if kind == "alarm": return f"{_host(obj)}⏰ {mention()} za 5 minut *{obj['title']}*! Potvrzeno: {', '.join(obj['confirmed']) or 'nikdo'}."
+    if kind == "live" and obj.get("legendary"): return f"🔴 PŘÍMÝ PŘENOS: *{obj['title']}*. Titanic scéna právě začíná: {room_url()}"
     if kind == "live": return f"🔴 *{obj['title']}* začíná. Roomka: {room_url()}"
-    if kind == "expired": return f"💤 *{obj['title']}* propadla, nepotvrdili všichni."
+    if kind == "expired": return f"{_host(obj)}💤 *{obj['title']}* propadla, nepotvrdili všichni."
     if kind == "done": return f"✅ *{obj['title']}* skončila."
     if kind == "seq_start": return f"⚡ {eng.cfg['players'][obj['player']]['name']}: *{obj['label']}* (2 min)."
     return None
@@ -75,9 +85,12 @@ def start(eng):
     def post(kind, obj):
         text = notification(eng, kind, obj)
         if not (text and channel): return
-        if kind == "spin":
+        if kind == "reveal":
             img = render.png(eng.snapshot()["wheel"], obj["target_angle"], title=obj["title"])
             app.client.files_upload_v2(channel=channel, content=img, filename="kolo.png", title=obj["title"], initial_comment=text)
+        elif kind == "live" and obj.get("legendary"):
+            img = render.titanic_poster(eng.cfg["scripts"].get(obj.get("script")))
+            app.client.files_upload_v2(channel=channel, content=img, filename="titanic.png", title=obj["title"], initial_comment=text)
         else: app.client.chat_postMessage(channel=channel, text=text)
 
     @app.command("/kolo")

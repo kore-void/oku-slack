@@ -9,12 +9,16 @@ aside{width:320px;background:#16233a;display:flex;flex-direction:column}
 #hold{background:#c0392b;color:#fff;position:relative;overflow:hidden;user-select:none;touch-action:none}
 #holdbar{position:absolute;left:0;top:0;bottom:0;width:0;background:rgba(255,255,255,.35)}
 #ev{font-size:20px;text-align:center} .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:center}
+#host{background:#fff;color:#222;border-radius:16px;padding:10px 14px;max-width:520px;position:relative;min-height:20px}
+#host:before{content:"🎠";position:absolute;left:-30px;top:6px;font-size:22px} #host b{color:#b03060}
+#cine{position:fixed;inset:0;width:100vw;height:100vh;display:none;z-index:10;background:#000}
 #seq{font-size:22px;color:#f1c40f;min-height:28px} #err{color:#ff7675;min-height:18px}
 </style></head><body>
 <main>
+  <div id="host"></div>
   <div id="ev">Připojuji…</div>
-  <canvas id="c" width="460" height="460"></canvas>
-  <div class="row"><button id="spin">Roztočit</button><button id="sound">🔊 Zapnout zvuk</button></div>
+  <canvas id="c" width="460" height="460"></canvas><canvas id="cine"></canvas>
+  <div class="row"><button id="spin">Roztočit</button><button id="force" title="test: allow_force">🌟 Vynutit legendu</button><button id="sound">🔊 Zapnout zvuk</button></div>
   <div class="row" id="confirm"><input id="code" maxlength="4" size="5" placeholder="KÓD"><button id="sendcode">Potvrdit kódem</button>
     <button id="hold"><span id="holdbar"></span>Podrž 2 s pro potvrzení</button></div>
   <div class="row"><button id="cmd">⚡ Nabitý příkaz</button><span id="cd"></span></div>
@@ -49,8 +53,49 @@ function draw(){ const c=$('c'),x=c.getContext('2d'),W=c.width,r=W/2-10; x.clear
     x.fillStyle=s.color;x.fill();x.strokeStyle='#fff';x.lineWidth=2;x.stroke();
     x.save();x.rotate((i+.5)*seg);x.fillStyle='#fff';x.font='bold 17px Arial';x.textAlign='center';x.fillText(s.key,0,-r*.62);x.restore();});
   x.restore(); x.fillStyle='#e74c3c';x.beginPath();x.moveTo(W/2-14,2);x.lineTo(W/2+14,2);x.lineTo(W/2,36);x.fill();
-  tickUI(); requestAnimationFrame(draw);}
+  tickUI(); drawCine(); requestAnimationFrame(draw);}
+// ---- Cinematic mode (legendary script). Beat = f(server time - live_at), identical on all clients. ----
+const CUES={fanfare:[523,659,784,1047],strings_soft:[262,330,392,330],heart_theme:[330,392,440,392,330,294],
+  piano_soft:[392,330,294,262],alarm_brass:[220,220,233,220],heart_full:[392,440,494,523,587]};
+let lastBeat=null, confetti=[];
+function cineBeat(e,now){const sd=e.script_data; if(!sd||e.state!=='live') return null; const t=now-e.live_at; let i=null;
+  sd.beats.forEach((b,k)=>{if(t>=b.at) i=k}); return i===null?null:{i,t,b:sd.beats[i],sd};}
+function cue(name){ if(!audioCtx||!CUES[name]) return; const t0=audioCtx.currentTime;
+  CUES[name].forEach((f,k)=>{const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.type='triangle';o.frequency.value=f;
+    g.gain.setValueAtTime(.07,t0+k*.35);g.gain.exponentialRampToValueAtTime(.001,t0+k*.35+.33);o.connect(g).connect(audioCtx.destination);o.start(t0+k*.35);o.stop(t0+k*.35+.35)});}
+function silhouette(x,y,h,name,arms,c){c.fillStyle='#0d0d16';c.beginPath();c.arc(x,y-h,h*.15,0,7);c.fill();c.fillRect(x-h*.12,y-h*.85,h*.24,h*.85);
+  if(arms){c.fillRect(x-h*.8,y-h*.72,h*1.6,h*.08)} c.fillStyle='#fff';c.fillRect(x-50,y-h-60,100,24);c.fillStyle='#111';c.font='bold 14px Arial';c.textAlign='center';c.fillText(name,x,y-h-43);}
+function drawCine(){ const cv=$('cine'), e=S&&S.event, now=srvNow(), cb=e&&cineBeat(e,now);
+  if(!cb){cv.style.display='none';return} cv.style.display='block';
+  if(cv.width!==innerWidth){cv.width=innerWidth;cv.height=innerHeight} const c=cv.getContext('2d'),W=cv.width,H=cv.height,v=cb.b.visual,hz=H*.55;
+  if(lastBeat!==e.id+':'+cb.i){lastBeat=e.id+':'+cb.i; cue(cb.b.music); if(v==='confetti') confetti=Array.from({length:180},(_,k)=>({x:(k*97)%W,y:-((k*53)%H),s:2+(k%5),c:['#fff','#d7141a','#11457e'][k%3]}));}
+  const night=(v==='plank'||v==='never_let_go'||v==='credits'), dark=v==='iceberg'||v==='sinking';
+  const g=c.createLinearGradient(0,0,0,hz); g.addColorStop(0,night?'#05070f':'#2b2160'); g.addColorStop(1,night?'#101830':dark?'#7a5a6a':'#ff8c3a'); c.fillStyle=g;c.fillRect(0,0,W,hz);
+  if(!night){c.fillStyle='#ffc457';c.beginPath();c.arc(W*.7,hz,90,Math.PI,0);c.fill()}
+  c.fillStyle=night?'#0b1a33':'#1f4f7a';c.fillRect(0,hz,W,H-hz); c.strokeStyle='rgba(180,210,240,.6)';c.lineWidth=2;
+  for(let k=0;k<7;k++){c.beginPath();for(let x=0;x<=W;x+=10){const y=hz+20+k*38+6*Math.sin(x/40+k+cb.t*1.5);x?c.lineTo(x,y):c.moveTo(x,y)}c.stroke()}
+  c.strokeStyle='#6e3c28';c.lineWidth=16;for(let r=0;r<4;r++){c.beginPath();c.ellipse(W*.3,H,220+r*60,(220+r*60)*.5,0,Math.PI,2*Math.PI);c.stroke()} // benches
+  const tilt=v==='sinking'?Math.sin(cb.t)*0.06:0; c.save();c.translate(W*.3,hz+90);c.rotate(tilt);
+  if(v!=='plank'&&v!=='never_let_go'&&v!=='credits'){c.fillStyle='#3d231d';c.beginPath();c.moveTo(-W*.28,H*.45);c.lineTo(W*.22,H*.45);c.lineTo(W*.32,-50);c.lineTo(0,0);c.fill();
+    silhouette(W*.12,-30,110,'TUREK',false,c); if(v!=='portrait') silhouette(W*.23,-48,110,'MACINKA',v==='flying',c);}
+  c.restore();
+  if(v==='portrait'){c.fillStyle='#f4ead2';c.fillRect(W*.55,hz-200,180,230);c.strokeStyle='#333';c.lineWidth=3;c.strokeRect(W*.55,hz-200,180,230);c.fillStyle='#333';c.beginPath();c.arc(W*.55+90,hz-120,30,0,7);c.fill();c.fillRect(W*.55+55,hz-90,70,100);c.font='12px Arial';c.fillText('OFICIÁLNÍ PORTRÉT',W*.55+90,hz+20)}
+  if(v==='iceberg'||v==='sinking'){c.fillStyle='#eef6ff';c.beginPath();c.moveTo(W*.78,hz+5);c.lineTo(W*.86,hz-170);c.lineTo(W*.92,hz-90);c.lineTo(W*.99,hz+5);c.fill();c.fillStyle='#24456e';c.font='bold 15px Arial';c.textAlign='center';c.fillText('NÁVRH NA VYSLOVENÍ',W*.885,hz-40);c.fillText('NEDŮVĚRY',W*.885,hz-20)}
+  if(v==='plank'||v==='never_let_go'){c.fillStyle='#7a4a2a';c.fillRect(W*.4,hz+60,200,24);silhouette(W*.4+100,hz+60,70,'MACINKA',false,c);silhouette(W*.4+230,hz+110,70,'TUREK',false,c);
+    if(v==='never_let_go'){c.fillStyle='rgba(255,255,220,.15)';c.beginPath();c.moveTo(W*.5,0);c.lineTo(W*.4,H);c.lineTo(W*.7,H);c.fill()}}
+  if(v==='rescue'){c.fillStyle='#111';c.fillRect(W*.6,hz-150,240,90);c.fillStyle='#3f3';c.font='bold 20px monospace';c.textAlign='center';c.fillText('NEPŘIJATO: −1 HLAS',W*.6+120,hz-98)}
+  if(v==='confetti'||v==='rescue'){confetti.forEach(p=>{p.y+=p.s;if(p.y>H)p.y=-10;c.fillStyle=p.c;c.fillRect(p.x+10*Math.sin(p.y/30),p.y,6,10)})}
+  if(v==='credits'){c.fillStyle='rgba(0,0,0,.85)';c.fillRect(0,0,W,H);c.fillStyle='#fff';c.textAlign='center';c.font='bold 34px Arial';c.fillText(cb.sd.credits,W/2,H*.42);
+    c.font='italic 20px Arial';c.fillText('„'+cb.sd.credits_quote+'“ – Marty Prchal',W/2,H*.5);silhouette(W/2,H*.8,90,'MARTY',false,c)}
+  c.fillStyle='#d7141a';c.fillRect(24,24,210,40);c.fillStyle='#fff';c.font='bold 20px Arial';c.textAlign='left';c.fillText((Math.floor(now)%2?'●':'○')+' PŘÍMÝ PŘENOS',36,51);
+  // lower third: caption + current line (lines advance evenly within the beat)
+  const nextAt=cb.i+1<cb.sd.beats.length?cb.sd.beats[cb.i+1].at:cb.sd.duration_s, L=cb.b.lines||[], li=Math.min(L.length-1,Math.floor((cb.t-cb.b.at)/((nextAt-cb.b.at)/Math.max(1,L.length))));
+  c.fillStyle='rgba(0,0,0,.75)';c.fillRect(0,H-150,W,150);c.fillStyle='#d4af37';c.fillRect(0,H-150,8,150);
+  c.fillStyle='#ffd166';c.font='bold 18px Arial';c.fillText(cb.b.caption,24,H-120);c.fillStyle='#bbb';c.font='italic 14px Arial';c.fillText(cb.b.direction.slice(0,160),24,H-95);
+  if(L.length&&li>=0){const [sp,tx]=L[li];c.fillStyle='#fff';c.font='bold 22px Arial';c.fillText((cb.sd.cast[sp]||sp)+': ',24,H-55);const w=c.measureText((cb.sd.cast[sp]||sp)+': ').width;c.font='22px Arial';
+    let line='',y=H-55,x0=24+w; for(const word of tx.split(' ')){const t=line?line+' '+word:word; if(c.measureText(t).width>W-x0-24&&line){c.fillText(line,x0,y);line=word;y+=28;x0=24}else line=t} c.fillText(line,x0,y)}}
 function renderUI(){ if(!S) return; const e=S.event;
+  $('host').innerHTML=e&&e.host_say?`<b>${esc(e.host_say.name)}:</b> ${esc(e.host_say.text)}`:'<b>Monika Babišová:</b> Nastupovat, kolotoč čeká!';
   $('ev').innerHTML=e?`<b>${esc(e.title)}</b> – ${e.state} – start ${hm(e.start_at)}${e.code?` · kód <b>${e.code}</b>`:''}<br>potvrdili: ${Object.keys(e.confirmed).join(', ')||'nikdo'}`:'Žádná událost. Roztoč kolo!';
   $('confirm').style.display=(e&&e.state==='pending'&&you&&!e.confirmed[you])?'flex':'none';
   $('players').textContent=Object.entries(S.players).map(([k,v])=>v.name).join(' · ');}
@@ -68,6 +113,7 @@ function startMusic(e,off){ playingFor=e.id;
     o.connect(g).connect(audioCtx.destination);o.start(t);o.stop(t+beat);}}
 $('sound').onclick=()=>{audioCtx=audioCtx||new AudioContext();$('sound').textContent='🔊 zvuk zapnut'};
 $('spin').onclick=()=>send({type:'spin'});
+$('force').onclick=()=>send({type:'spin',force:'snemovna'});
 $('cmd').onclick=()=>send({type:'command'});
 $('sendcode').onclick=()=>send({type:'code',event_id:S.event.id,code:$('code').value});
 let holdT=null; const hb=$('holdbar');

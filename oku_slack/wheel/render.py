@@ -48,3 +48,42 @@ def png(segments, angle=0.0, size=512, title=None):
 def segment_at(n, angle):
     """Which segment is under the top pointer when the wheel is rotated by -angle."""
     return int((angle % 360) // (360 / n))
+
+def titanic_poster(script=None, size=(1024, 640)):
+    """Poster for the legendary Titanic scene: sunset, sea, ship bow over parliament benches, iceberg,
+    PŘÍMÝ PŘENOS badge. Characters are flat silhouettes with name tags only (no likenesses)."""
+    script = script or {}
+    W, H = size; img = Image.new("RGB", size); d = ImageDraw.Draw(img)
+    hz = int(H * 0.55)
+    for y in range(hz):  # sunset gradient
+        t = y / hz; d.line([(0, y), (W, y)], fill=(int(40 + 215 * t), int(30 + 110 * t), int(90 - 40 * t)))
+    d.ellipse([W * 0.62, hz - 90, W * 0.62 + 180, hz + 90], fill=(255, 190, 80))
+    for y in range(hz, H):  # sea
+        t = (y - hz) / (H - hz); d.line([(0, y), (W, y)], fill=(int(20 + 30 * (1 - t)), int(60 + 40 * (1 - t)), int(110 + 40 * (1 - t))))
+    for k in range(6):  # waves
+        yy = hz + 20 + k * 40
+        d.line([(x, yy + 6 * math.sin(x / 40 + k)) for x in range(0, W, 8)], fill=(150, 190, 220), width=2)
+    d.polygon([(W * 0.80, hz + 5), (W * 0.88, hz - 120), (W * 0.93, hz - 60), (W * 0.98, hz + 5)], fill=(235, 245, 255))
+    d.text((W * 0.89, hz - 20), "NEDŮVĚRA", fill=(40, 70, 110), font=_font(18), anchor="mm")
+    for r in range(4):  # parliament benches (semicircle rows)
+        rr = 200 + r * 60
+        d.arc([W * 0.30 - rr, H - rr * 0.55, W * 0.30 + rr, H + rr * 0.55], 180, 360, fill=(110, 60, 40), width=18)
+    d.polygon([(40, H - 40), (W * 0.52, H - 40), (W * 0.62, hz + 40), (W * 0.30, hz + 90)], fill=(60, 35, 30))  # bow / rostrum
+    d.line([(W * 0.30, hz + 90), (W * 0.62, hz + 40)], fill=(220, 200, 160), width=4)
+    deck = lambda x: (hz + 90) + (x - W * 0.30) * (-50) / (W * 0.32)  # y of the bow rail at x
+    for x, name, arms, tag_dy in ((W * 0.53, "MACINKA", True, -150), (W * 0.42, "TUREK", False, -120)):  # silhouettes only
+        foot = deck(x); top = foot - 110
+        d.ellipse([x - 16, top, x + 16, top + 32], fill=(15, 15, 25))
+        d.rectangle([x - 14, top + 32, x + 14, foot], fill=(15, 15, 25))
+        if arms: d.line([(x - 90, top + 44), (x + 90, top + 44)], fill=(15, 15, 25), width=10)
+        ty = foot + tag_dy - 40
+        d.rounded_rectangle([x - 52, ty - 13, x + 52, ty + 13], 6, fill=(255, 255, 255))
+        d.text((x, ty), name, fill=(20, 20, 20), font=_font(16), anchor="mm")
+    d.rounded_rectangle([24, 24, 270, 70], 8, fill=(200, 20, 30))
+    d.ellipse([38, 38, 56, 56], fill="white")
+    d.text((162, 47), "PŘÍMÝ PŘENOS", fill="white", font=_font(24), anchor="mm")
+    d.text((W / 2, 110), script.get("title", "Titanic scéna"), fill="white", font=_font(30), anchor="mm")
+    d.text((W / 2, 150), "Mimořádná schůze sněmovny", fill=(255, 230, 180), font=_font(24), anchor="mm")
+    d.rectangle([0, H - 36, W, H], fill=(0, 0, 0))
+    d.text((W / 2, H - 18), script.get("credits", "Produkce: Marty Prchal, marketingový génius"), fill="white", font=_font(18), anchor="mm")
+    b = io.BytesIO(); img.save(b, "PNG"); return b.getvalue()

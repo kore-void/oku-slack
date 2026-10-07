@@ -13,4 +13,12 @@ def load(path=None):
     if not players: raise ValueError("players.toml: no players")
     if not events: raise ValueError("players.toml: no events")
     for e in events: e.setdefault("weight", 1); e.setdefault("duration_s", 600); e.setdefault("music_url", "")
-    return {"settings": s, "players": players, "events": events}
+    s.setdefault("allow_force", False); s.setdefault("nag_before_s", 120)
+    here = pathlib.Path(__file__).parent
+    with open(here / "host.toml", "rb") as f: host = tomllib.load(f)
+    scripts = {}
+    for e in events:
+        if e.get("script"):
+            with open(here / "events" / f"{e['script']}.toml", "rb") as f: scripts[e["script"]] = tomllib.load(f)
+            e["duration_s"] = scripts[e["script"]].get("duration_s", e["duration_s"])
+    return {"settings": s, "players": players, "events": events, "host": host, "scripts": scripts}

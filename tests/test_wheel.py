@@ -11,6 +11,9 @@ def env():
     clk = Clock(); cfg = config.load()
     return engine.Engine(cfg, store.Store(), clock=clk, rng=random.Random(7)), clk
 
+HOSTONLY = ("reveal", "nag")
+def K(out): return [k for k, _ in out if k not in HOSTONLY]  # host announcer notifications tested separately
+
 def confirm_all(e, ev):
     for p in e.players(): e.confirm_code(ev["id"], p, ev["code"])
 
@@ -31,9 +34,9 @@ def test_single_active_event(env):
 def test_not_live_without_all_players(env):
     e, clk = env; ev = e.spin("kore", lead_s=60)
     e.confirm_code(ev["id"], "kore", ev["code"].lower())
-    clk.adv(61); assert [k for k, _ in e.tick()] == ["alarm"] and e.active_event()["state"] == "pending"
+    clk.adv(61); assert K(e.tick()) == ["alarm"] and e.active_event()["state"] == "pending"
     e.confirm_code(ev["id"], "icik", ev["code"])  # late confirmation -> starts on next tick
-    assert [k for k, _ in e.tick()] == ["live"]
+    assert K(e.tick()) == ["live"]
 
 def test_bad_code(env):
     e, _ = env; ev = e.spin("kore")
@@ -51,15 +54,15 @@ def test_hold_enforced_server_side(env):
 
 def test_alarm_once_5min_before_then_live_then_done(env):
     e, clk = env; ev = e.spin("kore"); confirm_all(e, ev)  # lead 600 s
-    clk.adv(299); assert e.tick() == []
-    clk.adv(1); assert [k for k, _ in e.tick()] == ["alarm"]
-    clk.adv(10); assert e.tick() == []
-    clk.adv(290); out = e.tick(); assert [k for k, _ in out] == ["live"]
-    clk.adv(ev["duration_s"]); assert [k for k, _ in e.tick()] == ["done"]
+    clk.adv(299); assert K(e.tick()) == []
+    clk.adv(1); assert K(e.tick()) == ["alarm"]
+    clk.adv(10); assert K(e.tick()) == []
+    clk.adv(290); out = e.tick(); assert K(out) == ["live"]
+    clk.adv(ev["duration_s"]); assert K(e.tick()) == ["done"]
 
 def test_expires(env):
     e, clk = env; e.spin("kore")
-    clk.adv(600 + 1800); kinds = [k for k, _ in e.tick()]
+    clk.adv(600 + 1800); kinds = K(e.tick())
     assert "expired" in kinds and e.active_event() is None
 
 def test_cooldown_30min_persisted(tmp_path):
@@ -77,8 +80,8 @@ def test_cooldown_30min_persisted(tmp_path):
 def test_sequence_2min_server_timed(env):
     e, clk = env; q = e.use_command("kore")
     assert q["end_at"] - q["start_at"] == 120
-    clk.adv(30); assert [k for k, _ in e.tick()] == ["seq_step"]
-    clk.adv(89); e.tick(); clk.adv(1); assert ("seq_done" in [k for k, _ in e.tick()])
+    clk.adv(30); assert K(e.tick()) == ["seq_step"]
+    clk.adv(89); e.tick(); clk.adv(1); assert ("seq_done" in K(e.tick()))
     assert e.snapshot()["sequences"] == []
 
 def test_snapshot_hides_code_from_spectators(env):

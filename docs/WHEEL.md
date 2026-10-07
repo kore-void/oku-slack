@@ -60,3 +60,20 @@ Slack cannot animate: it gets the stopped wheel PNG + result text; the animation
 - ICIK Slack id is a placeholder in `players.toml`.
 - Room is bound to 127.0.0.1; ICIK needs a public URL (tunnel / hosting) and real `room_key`s.
 - Music: only the built-in synthesized cue is shipped; any `music_url` must be licensed.
+
+## Host announcer: Monika Babišová
+`oku_slack/wheel/host.toml` holds random line pools (`spin`, `result`, `alarm`, `nag`, `expiry`, `legendary`) with placeholders `{title} {who} {time} {missing}`.
+The engine stores the latest line on the event (`host_say`); the room shows it in the host bubble, Slack messages prefix it.
+Triggers: spin (or `legendary`), `reveal` after the spin animation (`spin_ms`), alarm (5 min), `nag` once `nag_before_s` before start if someone is missing, expiry.
+
+## Legendary event: Mimořádná schůze sněmovny / Titanic scéna
+- `players.toml` event `snemovna` (`legendary = true`, `script = "titanic"`, `weight = 0.15`, tunable; 0 = never).
+- Force for testing (only with `settings.allow_force = true`): `/kolo toc snemovna`, room button "Vynutit legendu", `Engine.spin(force="snemovna")`. Set `allow_force = false` in production.
+- Script: `oku_slack/wheel/events/titanic.toml` (12 timed beats: `at`, `visual`, `music`, `caption`, `direction`, `lines`), credits + Marty quote.
+- Cinematic state is server-authoritative: `Engine.cinematic()` = beat for `now - live_at`; tick emits `beat` notifications; snapshot carries `cinematic` + `script_data`.
+  Clients draw the same beat from the shared server clock (canvas overlay: parliament benches, ship bow, sunset, waves, iceberg, PŘÍMÝ PŘENOS badge, lower third, confetti, credits). Characters are flat silhouettes with name tags only.
+- Slack: at `live` the Kolo app uploads the Pillow poster (`render.titanic_poster`, also `GET /poster.png`).
+
+## Heimdall
+`C:\code\heimdall\services.d\oku_wheel.toml` (`autostart = false`). Start only after `SLACK_OKU_WHEEL_BOT_TOKEN` / `SLACK_OKU_WHEEL_APP_TOKEN` exist:
+`cd C:\code\heimdall; python -m heimdall start oku_wheel`

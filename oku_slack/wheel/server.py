@@ -38,7 +38,7 @@ class Hub:
 
     async def handle(self, p, msg):
         t, eid, e = msg.get("type"), msg.get("event_id"), self.eng
-        if t == "spin": ev = e.spin(p); await self.broadcast("spin", ev); self._notify("spin", ev)
+        if t == "spin": ev = e.spin(p, force=msg.get("force") or None); await self.broadcast("spin", ev); self._notify("spin", ev)
         elif t == "code": await self.broadcast("confirm", e.confirm_code(eid, p, msg.get("code")))
         elif t == "hold_start": e.hold_start(eid, p)
         elif t == "hold_end": await self.broadcast("confirm", e.hold_end(eid, p))
@@ -74,12 +74,14 @@ def make_app(eng, notify=None, period=0.5, run_loop=True):
     async def wheel_png(req):
         e = eng.active_event()
         return web.Response(body=render.png(eng.snapshot()["wheel"], e["target_angle"] if e else 0), content_type="image/png")
+    async def poster(req): return web.Response(body=render.titanic_poster(eng.cfg["scripts"].get("titanic")), content_type="image/png")
     async def index(req): return web.FileResponse(STATIC / "room.html")
 
     app.router.add_get("/", index)
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/api/state", state)
     app.router.add_get("/wheel.png", wheel_png)
+    app.router.add_get("/poster.png", poster)
     app.router.add_static("/static", STATIC)
 
     async def start_bg(app):
