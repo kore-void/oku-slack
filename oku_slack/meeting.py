@@ -35,17 +35,57 @@ def addressed(text, cfg, uid_map, exclude=None):
         if pos: hits.append((min(pos), k))
     return [k for _, k in sorted(hits)]
 
-def next_speaker(cfg, participants, last_speaker, last_text, rr_index, uid_map=None, blame=False):
-    """Addressed (non-self) participant first; Kalousek joins on blame; else round-robin.
-    Returns (speaker, new_rr_index)."""
-    uid_map = uid_map or {}
-    if blame and "kalousek" in cfg["personas"] and last_speaker != "kalousek":
+def _last_pos(text, cfg, uid_map, k):
+    t = (text or "").lower(); p = cfg["personas"][k]; pos = []
+    if k in uid_map: pos.append(t.rfind(f"<@{uid_map[k].lower()}>"))
+    for a in p["aliases"] + [p["name"].lower().split()[0]]:
+        for m in re.finditer(r"(?<!\w)@?" + re.escape(a.lower()) + r"(?!\w)", t): pos.append(m.start())
+    pos = [x for x in pos if x >= 0]
+    return max(pos) if pos else -1
+
+def addressed_last(text, cfg, uid_map, exclude=None):
+    """Addressed personas ordered by LAST occurrence, latest first (question target is usually last)."""
+    hits = [(_last_pos(text, cfg, uid_map, k), k) for k in cfg["personas"] if k != exclude]
+    return [k for p, k in sorted(hits, reverse=True) if p >= 0]
+
+def next_speaker(cfg, participants, last_speaker, last_text, rr_index, uid_map=None, blame=False, history=None):
+    """Pick next speaker. Prefers the LAST addressed persona (question target), never the current
+    speaker, avoids the previous speaker / anyone from the last 2 turns, ensures everyone speaks
+    once before anyone's 3rd turn; chair (babis) at most every 3rd turn. Returns (speaker, rr)."""
+    uid_map = uid_map or {}; history = list(history or [])
+    if last_speaker and (not history or history[-1] != last_speaker): history.append(last_speaker)
+    counts = {k: history.count(k) for k in set(participants) | set(history)}
+    recent = set(history[-2:])
+    def allowed(k):
+        if k == last_speaker: return False
+        if k == "babis": return "babis" not in recent
+        unspoken = [p for p in participants if p != k and p != last_speaker and counts.get(p, 0) == 0]
+        return not (counts.get(k, 0) >= 2 and unspoken)
+    if blame and "kalousek" in cfg["personas"] and allowed("kalousek") and "kalousek" not in recent:
         return "kalousek", rr_index
-    for k in addressed(last_text, cfg, uid_map, exclude=last_speaker):
-        if k in participants or k == "kalousek": return k, rr_index
-    order = [p for p in participants if p != last_speaker] or participants
-    k = order[rr_index % len(order)]
-    return k, rr_index + 1
+    cands = [k for k in addressed_last(last_text, cfg, uid_map, exclude=last_speaker)
+             if k in participants or k == "kalousek"]
+    for k in cands:
+        if allowed(k) and k not in recent: return k, rr_index
+    order = [p for p in participants if p != last_speaker] or list(participants)
+    if order:
+        r = rr_index % len(order); order = order[r:] + order[:r]
+    pool = sorted([k for k in order if allowed(k) and k not in recent], key=lambda k: counts.get(k, 0))
+    if pool: return pool[0], rr_index + 1
+    for k in cands:
+        if allowed(k): return k, rr_index
+    pool = [k for k in order if k != last_speaker] or order
+    return pool[0], rr_index + 1
+
+def strip_reply_mention(text, cfg):
+    """Leading '@Name' (reply-to) -> plain 'Name' when another @mention follows (the question target)."""
+    m = re.match(r"\s*@(\w+)", text or "")
+    if not m or "@" not in text[m.end():]: return text
+    w = m.group(1).lower()
+    for p in cfg["personas"].values():
+        if w in [a.lower() for a in p["aliases"]] + [p["name"].lower().split()[0]]:
+            return text[:m.start(1) - 1] + text[m.start(1):]
+    return text
 
 MEETING_RULES = (
     "Probíhá PORADA týmu OKÚ ve Slack vlákně. Níže je celý přepis (jména u replik). "
@@ -85,7 +125,7 @@ class Meeting:
 
     def run(self, turns=None, sleep=time.sleep, rng=random):
         cfg, n = self.c.cfg, turns or rng.randint(8, 12)
-        seen_human = set(); last_speaker, rr = None, 0
+        seen_human = set(); last_speaker, rr = None, 0; history = []
         for i in range(n):
             msgs = self.transcript()
             humans = [m for m in msgs if not m.get("bot_id") and m.get("user") not in self.c.uid_to_persona]
@@ -100,14 +140,14 @@ class Meeting:
             if i == 0 or final: spk = "babis" if "babis" in self.c.bridges else self.participants[0]
             else:
                 spk, rr = next_speaker(cfg, self.participants, last_speaker, last_text, rr, self.c.uid_map,
-                                       blame=core.is_blame(cfg, self.humanize(last_text).lower()))
+                                       blame=core.is_blame(cfg, self.humanize(last_text).lower()), history=history)
             if spk not in self.c.bridges: spk = next(p for p in self.participants if p in self.c.bridges)
             extra = []
             if i == 0: extra.append("Zahajuješ poradu: přivítej, shrň téma z první zprávy a vyvolej jménem prvního řečníka s požadavkem na čísla.")
             if final: extra.append("UZAVÍRÁŠ poradu: krátké shrnutí, kdo co slíbil, a finální (vymyšlený) zisk/KPI. Tentokrát žádnou otázku.")
             if interjection: extra.append("Člověk (Kore) právě vstoupil do porady – reaguj nejdřív přímo na jeho poslední zprávu.")
             text = self.c.say(spk, self.ch, self.ts, msgs, extra)
-            last_speaker = spk
+            last_speaker = spk; history.append(spk)
             if not final: sleep(rng.uniform(8, 15))
         return n
 
@@ -163,7 +203,7 @@ class Coordinator:
         system = b.prompt + "\n\n" + MEETING_RULES + "\n" + ROLE.get(spk, "") + f"\nKolegové na poradě: {names}."
         user = "PŘEPIS PORADY:\n" + "\n".join(lines[-40:]) + "\n\n" + " ".join(extra) + f"\nTeď mluvíš ty ({p['name']})."
         text = self.generate_ok(spk, system, [{"role": "user", "content": user}])
-        text = self.linkify(text)
+        text = self.linkify(strip_reply_mention(text, self.cfg))
         b.client.chat_postMessage(channel=ch, thread_ts=ts, text=text)
         core.log.info("meeting turn ch=%s ts=%s persona=%s", ch, ts, spk)
         return text

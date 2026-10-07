@@ -90,3 +90,40 @@ def test_gemini_backoff_rounds(monkeypatch):
     def post(url, headers, json, timeout):
         calls.append(1); return R(429) if len(calls) <= 6 else R(200, "zisk 3 %")
     assert core.gemini("s", [], post=post, sleep=slept.append) == "zisk 3 %" and len(slept) == 1
+
+
+def _pingpong_gen(s, h):
+    c = h[0]["content"]
+    if "(Andrej" in c: return "@Alenka, diky. A ted @Alenka: kolik to vydelalo?"
+    if "(Alenka" in c: return "@Babis, vydelalo to 3 %. @Babis, kdy dostanu bonus?"
+    return "@Babis, souhlas. @Alenka, mas ta cisla?"
+
+def test_last_mention_wins_and_previous_avoided():
+    parts = ["babis", "alenka", "marty", "peta"]
+    txt = f"<@{UIDS['babis']}> souhlas. <@{UIDS['marty']}>, kolik?"
+    assert M.next_speaker(CFG, parts, "alenka", txt, 0, UIDS, history=["babis", "alenka"])[0] == "marty"
+    # only the previous speaker is mentioned -> pick someone else
+    txt = f"<@{UIDS['babis']}> ok, <@{UIDS['babis']}> kdy?"
+    assert M.next_speaker(CFG, parts, "alenka", txt, 0, UIDS, history=["babis", "alenka"])[0] in ("marty", "peta")
+
+def test_strip_reply_mention():
+    assert M.strip_reply_mention("@Alenka, diky. @Marty, kolik?", CFG) == "Alenka, diky. @Marty, kolik?"
+    assert M.strip_reply_mention("@Marty, kolik?", CFG) == "@Marty, kolik?"
+
+def test_no_ping_pong():
+    th = [{"user": "UKORE", "ts": "1.0", "text": f"<@{UIDS['babis']}> <@{UIDS['alenka']}> <@{UIDS['marty']}> <@{UIDS['peta']}> zisk?"}]
+    c, _ = setup(th, _pingpong_gen)
+    m = c.claim(dict(th[0], channel="C"))
+    m.run(turns=10, sleep=lambda x: None)
+    inv = {u: k for k, u in UIDS.items()}
+    seq = [inv[x["user"]] for x in th if x.get("bot_id")]
+    assert len(seq) == 10 and set(seq) == {"babis", "alenka", "marty", "peta"}
+    for i in range(1, len(seq)): assert seq[i] != seq[i - 1]
+    for i in range(3, len(seq)): assert not (seq[i] == seq[i - 2] and seq[i - 1] == seq[i - 3]), seq
+    first_all = max(seq.index(p) for p in set(seq))
+    for p in set(seq): assert seq[:first_all].count(p) <= 2, seq
+    b = [i for i, k in enumerate(seq[:-1]) if k == "babis"]
+    assert all(y - x >= 3 for x, y in zip(b, b[1:])), seq
+    bots = [x for x in th if x.get("bot_id")]
+    assert not bots[0]["text"].startswith("<@")  # reply-to mention stripped, question target kept
+    assert f"<@{UIDS['alenka']}>" in bots[0]["text"]
