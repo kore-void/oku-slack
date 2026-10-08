@@ -6,7 +6,9 @@ DEFAULTS = dict(cooldown_s=1800, sequence_s=120, alarm_before_s=300, lead_s=600,
                 # v2: points / bets / effects / show
                 start_points=1000, bet_window_s=30, min_bet=10, house_edge=0.1, min_odds=1.5,
                 steal_pct=10, shield_s=1800, points_confirm=50, points_vote=10, points_catch=150, points_quiz=100,
-                catch_window_s=10, quiz_window_s=60, scene_llm=True, scene_llm_timeout_s=25)
+                catch_window_s=10, quiz_window_s=60, scene_llm=True, scene_llm_timeout_s=25,
+                # P-001: confirmation quorum (decision D1)
+                confirm_quorum=1)
 
 def load(path=None):
     path = pathlib.Path(path or os.environ.get("OKU_WHEEL_CONFIG") or ROOT / "players.toml")

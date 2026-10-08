@@ -32,7 +32,8 @@ def test_single_active_event(env):
     assert x.value.code == "event_active"
 
 def test_not_live_without_all_players(env):
-    e, clk = env; ev = e.spin("kore", lead_s=60)
+    e, clk = env; e.s["confirm_quorum"] = 0  # strict mode (0 = all players); production default is 1 (D1)
+    ev = e.spin("kore", lead_s=60)
     e.confirm_code(ev["id"], "kore", ev["code"].lower())
     clk.adv(61); assert K(e.tick()) == ["alarm"] and e.active_event()["state"] == "pending"
     e.confirm_code(ev["id"], "icik", ev["code"])  # late confirmation -> starts on next tick

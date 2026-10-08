@@ -67,7 +67,7 @@ def test_cinematic_inactive_for_normal_or_pending():
     e2, _ = mk(); ev2 = e2.spin("kore", force="snemovna"); assert e2.cinematic(ev2)["active"] is False
 
 def test_host_lines_all_kinds():
-    e, clk = mk(); host = e.cfg["host"]; assert host["name"] == "Monika Babišová"
+    e, clk = mk(); e.s["confirm_quorum"] = 0; host = e.cfg["host"]  # strict quorum so ICIK is nagged; assert host["name"] == "Monika Babišová"
     for k in ("spin", "result", "alarm", "nag", "expiry", "legendary"): assert len(host["lines"][k]) >= 2
     ev = e.spin("kore", force="porada"); assert ev["host_say"]["text"] in [l.format(who="Kore", title="", time="", missing="") for l in host["lines"]["spin"]]
     e.confirm_code(ev["id"], "kore", ev["code"])

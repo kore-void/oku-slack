@@ -3,7 +3,7 @@ from oku_slack.wheel import engine, store, config
 def _eng(t, tmp_path):
     cfg = config.load(); return engine.Engine(cfg, store.Store(str(tmp_path / "s.db")), clock=lambda: t[0])
 def test_expires_after_grace_and_frees_wheel(tmp_path):
-    t = [1_000_000.0]; e = _eng(t, tmp_path)
+    t = [1_000_000.0]; e = _eng(t, tmp_path); e.s["confirm_quorum"] = 2  # strict: both players (default is 1, D1)
     ev = e.spin("kore"); e.confirm_code(ev["id"], "kore", ev["code"])
     t[0] = ev["start_at"] + 30; e.tick()
     try: e.spin("kore"); assert False

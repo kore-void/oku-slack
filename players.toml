@@ -6,7 +6,8 @@ cooldown_s = 1800        # charged command: once per 30 min per player
 sequence_s = 120         # charged command sequence length
 alarm_before_s = 300     # alarm 5 min before event start
 lead_s = 600             # spin -> event start (default 10 min)
-confirm_wait_s = 60      # grace after start: not all confirmed by start_at + this -> event expires
+confirm_wait_s = 60      # grace after start: quorum not reached by start_at + this -> event expires
+confirm_quorum = 1       # D1: confirmations needed to go live (1 = any one player; 0 = all players). Others may still join
 hold_min_s = 2.0         # press-and-hold confirmation threshold
 spin_ms = 6000           # wheel spin animation length in the room
 slack_channel = "C0C6W8E6NP9"  # oku-porada: alarms/results

@@ -113,7 +113,7 @@ def blocks(eng, now=None, base=IMG_BASE, card=None, images=True):
     b.append(leaderboard_block(snap))
     b.append({"type": "divider"})
     btns = [{"type": "button", "action_id": "kolo_spin", "style": "primary", "text": {"type": "plain_text", "text": "🎡 Točit"}}]
-    if e and e["state"] == "pending" and ph == "result":
+    if e and e["state"] in ("pending", "ready") and ph == "result":  # ready: further players may still join
         btns.append({"type": "button", "action_id": "kolo_confirm", "style": "primary", "text": {"type": "plain_text", "text": "✅ Potvrdit účast"}})
     btns.append({"type": "button", "action_id": "kolo_command", "text": {"type": "plain_text", "text": "⚡ Nabitý příkaz"}})
     btns.append({"type": "overflow", "action_id": "kolo_more", "options": [{"text": {"type": "plain_text", "text": "ℹ️ Stav"}, "value": "stav"}]})

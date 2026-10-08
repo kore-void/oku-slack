@@ -3,10 +3,11 @@ tick() advances the state machine and returns notifications for the Slack adapte
 import json, random, string, threading, time, uuid
 from . import economy, effects, show
 
-# Event states: pending -> (all confirmed) ready -> (start_at reached) live -> done
-#               pending -> (start_at + confirm_wait_s, not all confirmed) expired
+# Event states: pending -> (confirm_quorum players confirmed) ready -> (start_at reached) live -> done
+#               pending -> (start_at + confirm_wait_s, quorum not reached) expired
 #               pending/ready -> (charged veto_respin) vetoed
-# Event start = max(start_at, moment of last confirmation): it never starts without ALL players.
+# settings.confirm_quorum (decision D1, default 1): how many players must confirm; 0 or >= player count = ALL.
+# Other players may still confirm (join) while the event is ready. Event start = max(start_at, quorum moment).
 # Betting round (kv "round"): Točit opens a bet_window_s window; when it closes the tick spins the wheel and the
 # round's bets are settled at reveal. All public mutations hold self.lock (Slack threads + tick loop).
 SEQ_STEPS = [(0, "Nabíjím..."), (30, "Čau lidi!"), (60, "Kampaň běží"), (90, "Finále"), (110, "Dojezd")]
@@ -96,7 +97,9 @@ class Engine:
         hm = lambda t: time.strftime("%H:%M", time.localtime(t))
         if e["state"] == "pending":
             names = [self.cfg["players"].get(p, {}).get("name", p) for p in self.missing(e)]
-            return f"Kolo je obsazené: čeká se na potvrzení ({', '.join(names)}) do {hm(e['start_at'] + self.s['confirm_wait_s'])}."
+            q = self.quorum(); need = q - self.confirmed_count(e)
+            who = ", ".join(names) if need >= len(names) else f"stačí {need} z: {', '.join(names)}"
+            return f"Kolo je obsazené: čeká se na potvrzení ({who}) do {hm(e['start_at'] + self.s['confirm_wait_s'])}."
         if e["state"] == "ready":
             return f"Kolo je obsazené: *{e['title']}* začíná v {hm(e['start_at'])}."
         end = e.get("end_at")
@@ -104,6 +107,16 @@ class Engine:
 
     def missing(self, e):
         return [p for p in self.players() if p not in e["confirmed"]]
+
+    def quorum(self):
+        """Confirmations needed for an event to go ready (settings.confirm_quorum; 0 / > players = all players)."""
+        n = len(self.players())
+        try: q = int(self.s.get("confirm_quorum", 1) or 0)
+        except (TypeError, ValueError): q = 0
+        return n if q <= 0 else min(q, n)
+
+    def confirmed_count(self, e): return sum(1 for p in self.players() if p in e["confirmed"])
+    def quorum_met(self, e): return self.confirmed_count(e) >= self.quorum()
 
     def pick(self, force=None):
         evs = self.cfg["events"]
@@ -142,11 +155,14 @@ class Engine:
 
     # ---------- confirmation (deliberate only) ----------
     def _confirm(self, e, p, how):
-        if e["state"] not in ("pending",): raise WheelError("not_confirmable", e["state"])
+        """pending: counts toward the quorum; ready: a further player joins. Re-confirming is a no-op (no double points)."""
+        if e["state"] not in ("pending", "ready"): raise WheelError("not_confirmable", e["state"])
+        if p in e["confirmed"]: return e
         e["confirmed"][p] = {"at": self.clock(), "how": how}
-        if self.clock() <= e["start_at"] and self.s.get("points_confirm"):
+        on_time = self.clock() <= e["start_at"]
+        if on_time and self.s.get("points_confirm"):
             self.eco.add(p, int(self.s["points_confirm"]), "potvrzení včas", e["id"]); e["confirmed"][p]["points"] = int(self.s["points_confirm"])
-        if set(e["confirmed"]) >= set(self.players()): e["state"] = "ready"
+        if e["state"] == "pending" and self.quorum_met(e): e["state"] = "ready"
         self.store.put_event(e)
         return e
 
@@ -266,8 +282,10 @@ class Engine:
                 e["revealed"] = True; ch = True; self.host_say("result", e); out.append(("reveal", e))
                 if e.get("round_id"):
                     mult = {}
-                    for p in self.players():
-                        if self.store.kv_get(f"double:{p}"): mult[p] = 2; self.store.kv_set(f"double:{p}", "")
+                    bettors = {b["player"] for b in self.store.bets(e["round_id"]) if b["state"] == "open"}
+                    for p in self.players():  # B5: double_bet is consumed only by a round the player actually bet in
+                        if p in bettors and self.store.kv_get(f"double:{p}"):
+                            mult[p] = 2; self.store.kv_set(f"double:{p}", "")
                     res = self.eco.settle(e["round_id"], e["key"], mult)
                     e["bets_result"] = [{"player": b["player"], "key": b["key"], "amount": b["amount"], "state": b["state"], "payout": b["payout"]} for b in res]
                     if res: out.append(("settled", e))
@@ -322,7 +340,8 @@ class Engine:
             e["cinematic"] = self.cinematic(e, now)
             sc = self.cfg.get("scripts", {}).get(e.get("script") or "")
             if sc: e["script_data"] = {k: sc[k] for k in ("title", "cast", "beats", "credits", "credits_quote", "duration_s") if k in sc}
-        return {"now": now, "event": e, "settings": {k: self.s[k] for k in ("spin_ms", "hold_min_s")},
+        return {"now": now, "event": e, "settings": dict({k: self.s[k] for k in ("spin_ms", "hold_min_s")},
+                                                         allow_force=bool(self.s.get("allow_force")), confirm_quorum=self.quorum()),
                 "wheel": [{"key": x["key"], "title": x["title"], "color": x.get("color", "#888"), "label": x.get("label")} for x in self.cfg["events"]],
                 "players": {k: {"name": v["name"], "cooldown_left": self.cooldown_left(k)} for k, v in self.cfg["players"].items()},
                 "sequences": [q for q in self.store.sequences() if q["state"] == "running"],

@@ -110,7 +110,7 @@ function drawCine(){ const cv=$('cine'), e=S&&S.event, now=srvNow(), cb=e&&cineB
 function renderUI(){ if(!S) return; const e=S.event;
   $('host').innerHTML=e&&e.host_say?`<b>${esc(e.host_say.name)}:</b> ${esc(e.host_say.text)}`:'<b>Monika Babišová:</b> Nastupovat, kolotoč čeká!';
   $('ev').innerHTML=e?`<b>${esc(e.title)}</b> – ${e.state} – start ${hm(e.start_at)}${e.code?` · kód <b>${e.code}</b>`:''}<br>potvrdili: ${Object.keys(e.confirmed).join(', ')||'nikdo'}`:'Žádná událost. Roztoč kolo!';
-  $('confirm').style.display=(e&&e.state==='pending'&&you&&!e.confirmed[you])?'flex':'none';
+  $('confirm').style.display=(e&&(e.state==='pending'||e.state==='ready')&&you&&!e.confirmed[you])?'flex':'none';
   $('players').textContent=Object.entries(S.players).map(([k,v])=>v.name).join(' · ');}
 function tickUI(){ if(!S) return; const now=srvNow();
   if(you){const left=Math.max(0,S.players[you].cooldown_left-(now-S.now)); $('cd').textContent=left>0?`nabíjí se ${Math.floor(left/60)}:${String(Math.floor(left%60)).padStart(2,'0')}`:'připraven'; $('cmd').disabled=left>0}

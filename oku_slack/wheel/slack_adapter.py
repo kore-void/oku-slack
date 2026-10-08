@@ -99,7 +99,9 @@ def status_text(eng, p, e, cd):
     lines = [f"🎡 *Stav kola:* {STATE_HUMAN.get(e['state'], e['state'])}", f"*{e['title']}* · start v {_hm(e['start_at'])}"]
     if e["state"] == "pending":
         ok = ", ".join(name(x) for x in e["confirmed"]) or "zatím nikdo"
-        lines.append(f"Potvrdili: {ok} · čeká se na: {', '.join(name(x) for x in eng.missing(e))}")
+        need = eng.quorum() - eng.confirmed_count(e)
+        lines.append(f"Potvrdili: {ok} · čeká se na: {', '.join(name(x) for x in eng.missing(e))}"
+                     + (f" (stačí {need})" if need < len(eng.missing(e)) else ""))
     lines.append(eng.busy_reason(e) if e["state"] in ("pending", "ready", "live") else "Kolo je volné.")
     lines.append(cmd)
     return "\n".join(lines)
@@ -134,7 +136,7 @@ def notification(eng, kind, obj):
     if kind == "alarm": return f"{_host(obj)}⏰ {mention()} za 5 minut *{obj['title']}*! Potvrzeno: {', '.join(obj['confirmed']) or 'nikdo'}."
     if kind == "live" and obj.get("legendary"): return f"🔴 PŘÍMÝ PŘENOS: *{obj['title']}*. Titanic scéna právě začíná!"
     if kind == "live": return f"🔴 *{obj['title']}* začíná!"
-    if kind == "expired": return f"{_host(obj)}💤 *{obj['title']}* propadla, nepotvrdili všichni."
+    if kind == "expired": return f"{_host(obj)}💤 *{obj['title']}* propadla, nepotvrdil dost hráčů."
     if kind == "done": return f"✅ *{obj['title']}* skončila."
     if kind == "seq_start": return f"⚡ {eng.cfg['players'][obj['player']]['name']}: *{obj['label']}* (2 min)."
     return None
