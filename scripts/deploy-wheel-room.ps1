@@ -1,11 +1,13 @@
 # Deploy the static wheel room to https://itzkore.cz/oku/kolo/ (FTP /www/oku/kolo, upload-only, never deletes).
-# WS goes through the Cloudflare quick tunnel (Heimdall service oku_wheel_tunnel); its host changes on every
-# tunnel restart, so re-run this script after a tunnel restart. Uses C:\code\umbra\tools\_upload_umbra_resilient.js
+# WS goes through the NAMED Cloudflare tunnel kolo-ws.itzkore.cz -> 127.0.0.1:8797 (Heimdall service
+# oku_wheel_tunnel, autostart); its hostname is stable, so the default -WsUrl needs no re-deploy after a tunnel restart.
+# -QuickTunnel: legacy mode, read the hostname of a running quick tunnel from cloudflared metrics instead.
+# Re-run only when room.html or the wheel images change. Uses C:\code\umbra\tools\_upload_umbra_resilient.js
 # and the FTP credentials it already loads from umbra .env (never printed).
-param([string]$WsUrl = "", [string]$Remote = "/www/oku/kolo")
+param([string]$WsUrl = "wss://kolo-ws.itzkore.cz/ws", [string]$Remote = "/www/oku/kolo", [switch]$QuickTunnel)
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
-if (-not $WsUrl) {
+if ($QuickTunnel) {
     $cf = Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'" | ?{ $_.CommandLine -match "127\.0\.0\.1:8797" } | Select -First 1
     if (-not $cf) { throw "oku_wheel_tunnel (cloudflared -> :8797) is not running" }
     $host_ = $null

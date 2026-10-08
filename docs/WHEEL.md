@@ -9,7 +9,7 @@ Separate from the live persona bridge (`oku_slack.bridge`, Heimdall `oku_slack`)
 flowchart LR
   subgraph Service["oku_slack.wheel.server (one process)"]
     E["engine.Engine (pure, injectable clock + RNG)"]
-    DB[("SQLite logs/wheel.sqlite3: events, cooldowns, sequences, chat")]
+    DB[("SQLite logs/wheel.sqlite3: events, cooldowns, sequences, chat, kv, ledger, bets, world_events")]
     T["tick loop 0.5 s: alarm / live / expired / done / sequence steps"]
     H["WebSocket hub /ws (broadcast state + server now)"]
     R["render.py: SVG + PNG (Pillow)"]
@@ -33,11 +33,12 @@ flowchart LR
 | `oku_slack/wheel/server.py` | aiohttp app: `/` room, `/ws`, `/api/state`, `/wheel.png`, tick loop |
 | `oku_slack/wheel/slack_adapter.py` | `/kolo` command, code modal, channel notifications |
 | `manifests/kolo.yaml` | manifest for the dedicated Slack app (slash command, interactivity) |
+| `oku_slack/world/` | world layer (P-001): append-only diary `world_events` (`log.py`), read-only projection (`state.py`), Czech surfaces (`view.py`) |
 
 ## Rules
 - **Spin**: weighted random event; the server picks `target_angle` inside the winning segment, `turns`, `spin_at`. One active event at a time.
-- **Confirmation**: event goes `pending -> ready` only when ALL players confirmed. Deliberate only: type the 4-char event code (room or Slack modal) or press-and-hold in the room; the hold is measured by the server between `hold_start` and `hold_end` (>= `hold_min_s`, 2 s). Client timing is ignored.
-- **Start**: at `start_at` (spin + `lead_s`, 10 min) if ready; if confirmations finish later, it starts on the next tick; not all confirmed by `start_at + confirm_wait_s` -> `expired`.
+- **Confirmation**: event goes `pending -> ready` once `confirm_quorum` players confirmed (`players.toml [settings]`, default **1** = any one player, decision D1; `0` = all players). Other players may still confirm (join) while it is `ready`; re-confirming is a no-op. Deliberate only: type the 4-char event code (room or Slack modal) or press-and-hold in the room; the hold is measured by the server between `hold_start` and `hold_end` (>= `hold_min_s`, 2 s). Client timing is ignored.
+- **Start**: at `start_at` (spin + `lead_s`, 10 min) if ready; if the quorum is reached later, it starts on the next tick; quorum not reached by `start_at + confirm_wait_s` -> `expired`.
 - **Alarm**: once, `alarm_before_s` (300 s) before `start_at`; Slack message mentions all players.
 - **Charged command**: per player, once per `cooldown_s` (1800 s), stored in SQLite; starts a 120 s server-timed sequence (steps at 0/30/60/90/110 s).
 - **Room sync**: every WS message carries the full snapshot + server `now`; clients compute `offset = server_now - local_now`. Spin angle is `(turns*360 + target_angle) * easeOutCubic((now - spin_at)/spin_ms)`, so all clients show the same spin. Music starts at offset `now - live_at` (URL via `<audio>.currentTime`, or a built-in synthesized loop when `music_url` is empty).
@@ -47,17 +48,19 @@ flowchart LR
 ```powershell
 cd C:\code\oku-slack
 .\scripts\run-wheel-room.ps1            # creates .venv-wheel on first run, opens http://127.0.0.1:8797/?p=kore&k=kore-local
-.\scripts\run-wheel-room.ps1 -Test      # wheel tests
+.\scripts\run-wheel-room.ps1 -Test      # full test suite (.venv-wheel; the bridge .venv has no Pillow)
 .\scripts\run-wheel-room.ps1 -Slack     # also connect the OKÚ Kolo app (env SLACK_OKU_WHEEL_BOT_TOKEN / SLACK_OKU_WHEEL_APP_TOKEN)
 ```
 ICIK: `http://<host>:8797/?p=icik&k=icik-local`. Env: `OKU_WHEEL_CONFIG`, `OKU_WHEEL_DB`, `OKU_WHEEL_HOST`, `OKU_WHEEL_PORT`, `OKU_WHEEL_PUBLIC_URL` (link used in Slack messages).
 
 ## Slack
-`/kolo` spin (ephemeral reply with your code + wheel PNG posted to `slack_channel`), `/kolo potvrdit` (modal with code), `/kolo prikaz`, `/kolo stav`.
-Slack cannot animate: it gets the stopped wheel PNG + result text; the animation is in the room.
+- The Slack experience is ONE persistent control panel message (`panel.py`, kv `panel_ts`) in `slack_channel`: drums -> pre-rendered spin GIF -> result card, buttons 🎡 Točit / ✅ Potvrdit účast / ⚡ Nabitý příkaz / overflow (ℹ️ Stav, 🌍 Stav světa). The only separate channel post is the 5-minute alarm.
+- `/kolo` (panel), `/kolo toc`, `/kolo sazka <klíč> <částka|all>`, `/kolo potvrdit` (modal with code), `/kolo prikaz`, `/kolo zebricek`, `/kolo stav`, `/kolo svet` (world state, ephemeral). Subcommands are parsed in code; the Slack app only registers `/kolo`.
+- Panel resilience: soft errors (`not_in_channel`, `ratelimited`, ...) wait 120 s; other errors back off exponentially per repeated code (1, 2, 4 ... capped at 300 s) and log Slack's `response_metadata.messages`. After 3 consecutive `invalid_blocks` the panel renders text-only (no image blocks) for 10 min. A freshly uploaded result card is referenced (`slack_file`) only 3 s after upload; until then (and if Slack refuses it) the static card URL is used.
 
-## Open items
-- Room is bound to 127.0.0.1; ICIK needs a public URL (tunnel / hosting) and real `room_key`s.
+## Public room
+- Static room: `https://www.itzkore.cz/oku/kolo/` (`scripts/deploy-wheel-room.ps1`, FTP). WebSocket: `wss://kolo-ws.itzkore.cz/ws` through the named Cloudflare tunnel (Heimdall `oku_wheel_tunnel`, `kolo-ws.itzkore.cz` -> 127.0.0.1:8797). Real `room_key`s live in the untracked `players.local.toml`.
+- The tunnel forwards EVERY path on :8797. `/api/state` is public on purpose (room feed, the code is stripped). New routes must be loopback-only: `/api/world` returns 403 unless the peer is local AND no proxy header (`CF-Connecting-IP`, `X-Forwarded-For`, ...) is present (`server.loopback_only`).
 - Music: only the built-in synthesized cue is shipped; any `music_url` must be licensed.
 
 ## Host announcer: Monika Babišová
@@ -67,21 +70,21 @@ Triggers: spin (or `legendary`), `reveal` after the spin animation (`spin_ms`), 
 
 ## Legendary event: Mimořádná schůze sněmovny / Titanic scéna
 - `players.toml` event `snemovna` (`legendary = true`, `script = "titanic"`, `weight = 0.15`, tunable; 0 = never).
-- Force for testing (only with `settings.allow_force = true`): `/kolo toc snemovna`, room button "Vynutit legendu", `Engine.spin(force="snemovna")`. Set `allow_force = false` in production.
+- Force for testing (only with `settings.allow_force = true`): `/kolo toc snemovna`, room button "Vynutit legendu", `Engine.spin(force="snemovna")`. Production has `allow_force = false` (D10); the room hides the button unless `/api/state` reports `settings.allow_force`. Tests enable force via `tests/conftest.py`.
 - Script: `oku_slack/wheel/events/titanic.toml` (12 timed beats: `at`, `visual`, `music`, `caption`, `direction`, `lines`), credits + Marty quote.
 - Cinematic state is server-authoritative: `Engine.cinematic()` = beat for `now - live_at`; tick emits `beat` notifications; snapshot carries `cinematic` + `script_data`.
   Clients draw the same beat from the shared server clock (canvas overlay: parliament benches, ship bow, sunset, waves, iceberg, PŘÍMÝ PŘENOS badge, lower third, confetti, credits). Characters are flat silhouettes with name tags only.
-- Slack: at `live` the Kolo app uploads the Pillow poster (`render.titanic_poster`, also `GET /poster.png`).
+- Slack: during the legend the panel switches to "PŘÍMÝ PŘENOS" (static `titanic.png` + current beat); `GET /poster.png` renders the Pillow poster on demand.
 
 ## Heimdall
-`C:\code\heimdall\services.d\oku_wheel.toml` (`autostart = false`). Start only after `SLACK_OKU_WHEEL_BOT_TOKEN` / `SLACK_OKU_WHEEL_APP_TOKEN` exist:
-`cd C:\code\heimdall; python -m heimdall start oku_wheel`
+`C:\code\heimdall\services.d\oku_wheel.toml` (`autostart = true`, health `GET /api/state`), plus `oku_wheel_tunnel.toml` (named tunnel `kolo-ws.itzkore.cz` -> :8797, autostart).
+Apply code/config changes with `heimdall restart oku_wheel`. Redeploy the static room (`scripts/deploy-wheel-room.ps1`) only when `room.html` or the images change.
 
 ## Slack canvas + spin GIF
 - `canvas.py`: channel canvas "OKÚ Kolo · živě" in `slack_channel` (conversations.canvases.create; if the channel already has one, a standalone canvas shared read-only to the channel). Id stored in SQLite `kv.canvas_id`, reused after restart.
-  Full rewrite (canvases.edit replace) on state changes, max 1 edit / 3 s, plus a 60 s refresh (countdown, cooldowns). Content: event + state + start, per-player confirmation, Monika's latest line, Titanic beat (caption, direction, lines) during a legendary event, result PNG link, charged-command cooldowns, active sequence step, last 10 room chat messages. The event code is never put in the canvas.
+  Full rewrite (canvases.edit replace) on state changes, max 1 edit / 3 s, plus a 60 s refresh (countdown, cooldowns). Content: event + state + start, per-player confirmation, Monika's latest line, Titanic beat (caption, direction, lines) during a legendary event, charged-command cooldowns, active sequence step, "🌍 Stav světa" (resources, blame, live/spun, last outcomes), last 10 room chat messages. The event code is never put in the canvas.
   Slack errors (missing_scope, not_in_channel, ...) are logged by code with a 5 min backoff; the service keeps running.
-- `render.spin_gif`: 40 frames, 420 px, ease-out identical to the room, blinking marquee bulbs, adaptive palette per frame, last frame = result with banner (2.2 s), ~1.7 MB. Posted in the thread of the spin message.
+- `render.spin_gif`: 40 frames, 420 px, ease-out identical to the room, blinking marquee bulbs, adaptive palette per frame, last frame = result with banner (2.2 s), ~1.7 MB. Pre-rendered per segment by `deploy-wheel-room.ps1` and shown in the panel (`kolo-spin-<key>.gif`).
 - `render.png`: 800 px, 3x supersampled: radial-gradient segments, gold rim with marquee bulbs, glossy OKÚ hub, pointer with shadow, stage spotlight, Czech labels (Segoe UI Bold).
 - Bot scopes (manifests/kolo.yaml): commands, chat:write, files:write, files:read, canvases:write, canvases:read.
 
@@ -149,3 +152,11 @@ The 2-min sequence narrates the effects live in the panel (`Sekvence` field).
 - Bot scopes: `reactions:read` (hype meter), `chat:write.customize` (optional name override).
 - Event subscriptions (bot events): `reaction_added`, `reaction_removed`. Reinstall the app after the change.
 - Until granted: the hype meter stays at 0 and wheel-bot lines are narrated; everything else works. Granted scopes are read from the `x-oauth-scopes` header of `auth.test` at start and re-checked every 5 min (name override switches on live). Reaction handlers are always registered, so events flow over the existing Socket Mode connection as soon as the app is reinstalled with the subscription; no code change or restart is needed (restart only to log the new scopes immediately).
+
+## OKÚ World layer (P-001: diary + read-only state)
+Plan: `docs/ECOSYSTEM-PLAN.md`. Runs inside the `oku_wheel` process (D2). P-001 adds **no channel posts** and **no consequences**.
+- **Diary** (`oku_slack/world/log.py`): append-only SQLite table `world_events` in `logs/wheel.sqlite3` + JSONL mirror `logs/world.jsonl` (env `OKU_WORLD_JSONL`). Envelope: `id` (`we_0001`), `seq`, `ts`, `type`, `source` (`engine` / `slack` / `room` / `backfill`), `actor`, `subject` (`event:<id>`, `round:<id>`), `payload`, `causal_parents` (default: the first row about the same subject, i.e. the spin), `regime`, `content_version` (git sha), `run_id`. Free text (chat, slash args) is never stored, only types/ids/lengths. A diary failure is logged and never breaks the wheel.
+- Types: `wheel.spin|reveal|confirm|ready|alarm|nag|live|done|expired|vetoed`, `bets.open`, `bet.placed`, `bet.settled`, `bets.refunded`, `effect.double_used`, `command.used`, `show.vote|catch|quiz`, `reaction` (tracked panel/scene messages; emoji name, delta, hype applied), `room.chat` (length only), `ui.kolo` (`/kolo` subcommand name + `slash`/`button`).
+- **Backfill**: on start, if the diary is empty, pre-P-001 history (events, bets, sequences tables) is imported once with `source=backfill` (kv `world:backfilled`).
+- **Projection** (`oku_slack/world/state.py`): pure fold `project(events, ctx)`; incremental cache equals a rebuild from scratch (tested). Resources Dotace 5 000 / Kampaň 35 (0-100) / Hranolky 80 (0-200) / Lajky 1 200 are seeds (`world_<key>` settings override) and only change through `world.delta` rows, which nothing writes until P-002. Read-only interpretation: blame +1 for each player missing an `expired` event and for a `veto`, +1 to the command persona (Kalousek) for a successful `steal_points`; witnessed acts per player per persona (host persona of the event, or the command persona); per-player stats; per-persona event counts; 7-day metrics. `World.snapshot()` also stores kv `world:snapshot`.
+- **Surfaces**: `/kolo svet` (ephemeral), panel overflow "🌍 Stav světa", one panel context line under the leaderboard, canvas section "🌍 Stav světa". Loopback-only `GET /api/world[?events=N]` for local inspection.
