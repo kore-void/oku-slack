@@ -2,7 +2,11 @@
 Stored as kv panel_channel/panel_ts in SQLite; re-rendered (chat.update, >= 1 s apart) on every state change.
 Spin choreography (by server time since spin_at): drums -> spin GIF -> 'A je to...' -> result card.
 Static images: https://www.itzkore.cz/oku/kolo/img/ (deploy-wheel-room.ps1). The result card with the start
-time is rendered per event and uploaded via files_upload_v2 (slack_file image block); static card fallback."""
+time is rendered per event and uploaded via files_upload_v2 (slack_file image block); static card fallback.
+Resilience (P-001): soft errors wait retry_s; other errors back off exponentially per repeated code (min_interval *
+2^(n-1), capped at backoff_cap_s) and log Slack's response_metadata.messages. After degrade_after consecutive
+invalid_blocks the panel renders text-only (no image blocks) for degrade_s. A freshly uploaded result card is only
+referenced (slack_file) card_ready_s after the upload; until then the static card URL is shown."""
 import logging, os, re, threading, time
 from . import show as _show
 
@@ -22,6 +26,16 @@ def _err(e):
     r = getattr(e, "response", None)
     try: return r["error"]
     except Exception: return type(e).__name__
+
+def _meta(e, n=600):
+    """Slack's response_metadata.messages (block validation details; never contains tokens), joined and truncated."""
+    r = getattr(e, "response", None)
+    try: msgs = (r.get("response_metadata") or {}).get("messages") or []
+    except Exception:
+        try: msgs = r["response_metadata"]["messages"]
+        except Exception: msgs = []
+    txt = " | ".join(str(m) for m in msgs)
+    return txt if len(txt) <= n else txt[: n - 1] + "…"
 
 def _hm(ts): return time.strftime("%H:%M", time.localtime(ts))
 def _date(ts, fmt="{time}"): return f"<!date^{int(ts)}^{fmt}|{_hm(ts)}>"
@@ -51,8 +65,9 @@ def image_block(e, ph, base=IMG_BASE, card=None):
         url = f"{base}card-{e['key']}.png?v={e['id']}"
     return {"type": "image", "image_url": url, "alt_text": title, "title": {"type": "plain_text", "text": title[:2000]}}
 
-def blocks(eng, now=None, base=IMG_BASE, card=None):
-    """Pure: Block Kit for the panel (<= 50 blocks, never the event code). Returns (blocks, phase)."""
+def blocks(eng, now=None, base=IMG_BASE, card=None, images=True):
+    """Pure: Block Kit for the panel (<= 50 blocks, never the event code). Returns (blocks, phase).
+    images=False: text-only degrade (the image block becomes a context line with its title)."""
     snap = eng.snapshot(); now = snap["now"] if now is None else now
     e, players, rnd = snap["event"], eng.cfg["players"], snap.get("round"); ph = phase(e, now, rnd)
     h = (e or {}).get("host_say") or {}
@@ -66,6 +81,8 @@ def blocks(eng, now=None, base=IMG_BASE, card=None):
     b = [{"type": "header", "text": {"type": "plain_text", "text": "🎡 OKÚ KOLO ŠTĚSTÍ"}},
          {"type": "context", "elements": [{"type": "mrkdwn", "text": _t(f"🎠 *Monika Babišová* · _{line}_", 2900)}]},
          image_block(e, ph, base, card)]
+    if not images:
+        b[2] = {"type": "context", "elements": [{"type": "mrkdwn", "text": _t(f"🖼️ {b[2]['title']['text']}", 2900)}]}
     if ph == "betting": b += betting_blocks(eng, snap, rnd, now)
     if ph in ("live", "legend"): b += show_blocks(eng, e, now)
     if ph == "legend":
@@ -176,12 +193,14 @@ def fallback_text(eng):
 
 class Panel:
     def __init__(self, eng, client, channel, store, clock=time.time, min_interval=1.0, refresh_s=60.0, retry_s=120.0,
-                 base=IMG_BASE, card_renderer=None):
+                 base=IMG_BASE, card_renderer=None, backoff_cap_s=300.0, degrade_after=3, degrade_s=600.0, card_ready_s=3.0):
         self.eng, self.client, self.channel, self.store, self.clock, self.base = eng, client, channel, store, clock, base
         self.min_interval, self.refresh_s, self.retry_s = min_interval, refresh_s, retry_s
+        self.backoff_cap_s, self.degrade_after, self.degrade_s, self.card_ready_s = backoff_cap_s, degrade_after, degrade_s, card_ready_s
         self.card_renderer = card_renderer  # callable(event) -> PNG bytes; None = static card URL only
         self.dirty, self.last, self.blocked_until, self.last_phase, self.last_error, self.updates = True, -1e18, 0.0, None, None, 0
-        self.cards, self.card_failed = {}, set()
+        self.err_streak, self.errors, self.degraded_until, self.last_card_ref, self._pending_card_ref = 0, 0, 0.0, None, None
+        self.cards, self.card_at, self.card_failed = {}, {}, set()
         self.lock = threading.Lock()
 
     def request(self): self.dirty = True
@@ -191,24 +210,52 @@ class Panel:
         return (ch, ts) if ch and ts else (None, None)
 
     def _fail(self, what, e):
-        code = _err(e); self.last_error = code
-        log.warning("panel %s failed: %s", what, code)
-        self.blocked_until = self.clock() + (self.retry_s if code in SOFT else self.min_interval)
+        code = _err(e); now = self.clock(); self.errors += 1
+        self.err_streak = self.err_streak + 1 if code == self.last_error else 1
+        self.last_error = code
+        if code in SOFT: wait = self.retry_s
+        else: wait = min(self.backoff_cap_s, self.min_interval * 2 ** min(self.err_streak - 1, 30))
+        self.blocked_until = now + wait
+        meta = _meta(e)
+        log.warning("panel %s failed: %s (x%d in a row, retry in %.0fs)%s", what, code, self.err_streak, wait,
+                    f" slack: {meta}" if meta else "")
+        if code == "invalid_blocks" and self.err_streak >= self.degrade_after and now >= self.degraded_until:
+            self.degraded_until = now + self.degrade_s
+            log.warning("panel degraded to text-only for %.0fs after %d invalid_blocks", self.degrade_s, self.err_streak)
         return None
 
+    def _ok(self):
+        if self.err_streak: log.info("panel recovered after %d failed attempt(s) (%s)", self.err_streak, self.last_error)
+        self.err_streak, self.last_error = 0, None
+
+    def degraded(self): return self.clock() < self.degraded_until
+
     def _card(self, e, ph):
+        """slack_file id of the per-event card once it is safe to reference, else None (static card URL).
+        B3: a file referenced right after files_upload_v2 is often not processed yet -> invalid_blocks; so the
+        first render after an upload uses the static card and the slack_file switch happens card_ready_s later."""
         if ph != "result" or not e or not self.card_renderer or e["id"] in self.card_failed: return None
-        if e["id"] in self.cards: return self.cards[e["id"]]
-        try:
-            r = self.client.files_upload_v2(content=self.card_renderer(e), filename=f"kolo-{e['id']}.png", title=e["title"])
-            f = r.get("file") or (r.get("files") or [{}])[0]
-            self.cards[e["id"]] = f.get("id"); return self.cards[e["id"]]
-        except Exception as ex:
-            log.warning("result card upload failed: %s (static card)", _err(ex)); self.card_failed.add(e["id"]); return None
+        if e["id"] not in self.cards:
+            try:
+                r = self.client.files_upload_v2(content=self.card_renderer(e), filename=f"kolo-{e['id']}.png", title=e["title"])
+                f = r.get("file") or (r.get("files") or [{}])[0]
+                if not f.get("id"): raise ValueError("no file id")
+                self.cards[e["id"]], self.card_at[e["id"]] = f["id"], self.clock()
+            except Exception as ex:
+                log.warning("result card upload failed: %s (static card)", _err(ex)); self.card_failed.add(e["id"]); return None
+        return self.cards[e["id"]] if self.clock() - self.card_at.get(e["id"], 0) >= self.card_ready_s else None
+
+    def _card_due(self, e, ph):
+        """True when a pending card just became referenceable but the panel still shows the static one."""
+        if ph != "result" or not e or e["id"] not in self.cards or e["id"] in self.card_failed: return False
+        return self.last_card_ref != self.cards[e["id"]] and self.clock() - self.card_at.get(e["id"], 0) >= self.card_ready_s
 
     def _render(self, now):
         e = self.eng.snapshot()["event"]; ph = phase(e, now, self.eng.round())
-        return blocks(self.eng, now, self.base, self._card(e, ph)), e
+        card = self._card(e, ph); deg = self.degraded()
+        bl = blocks(self.eng, now, self.base, None if deg else card, images=not deg)
+        self._pending_card_ref = None if deg else card
+        return bl, e
 
     def post_new(self):
         """(Re-)post the panel and remember it. Returns ts or None."""
@@ -217,8 +264,8 @@ class Panel:
             try: r = self.client.chat_postMessage(channel=self.channel, text=fallback_text(self.eng), blocks=bl)
             except Exception as e: return self._fail("post", e)
             self.store.kv_set("panel_channel", r.get("channel", self.channel)); self.store.kv_set("panel_ts", r["ts"])
-            self.dirty, self.last, self.last_phase, self.last_error = False, self.clock(), ph, None
-            self.updates += 1; log.info("panel posted"); return r["ts"]
+            self.dirty, self.last, self.last_phase, self.last_card_ref = False, self.clock(), ph, self._pending_card_ref
+            self._ok(); self.updates += 1; log.info("panel posted"); return r["ts"]
 
     def flush(self, force=False):
         now = self.clock()
@@ -226,8 +273,9 @@ class Panel:
         ch, ts = self.where()
         if not ts: return bool(self.post_new())
         with self.lock:
-            ph = phase(self.eng.snapshot()["event"], now, self.eng.round())
+            cur = self.eng.snapshot()["event"]; ph = phase(cur, now, self.eng.round())
             if ph != self.last_phase: self.dirty = True  # choreography step
+            if self._card_due(cur, ph): self.dirty = True  # static card -> uploaded card
             due = self.dirty or now - self.last >= (BETTING_REFRESH_S if ph == "betting" else self.refresh_s)
             if not due or (now - self.last < self.min_interval and not force): return False
             (bl, ph), e = self._render(now)
@@ -235,11 +283,11 @@ class Panel:
             except Exception as ex:
                 code = _err(ex)
                 if code in ("message_not_found", "cant_update_message"): self.store.kv_set("panel_ts", "")
-                if code == "invalid_blocks" and e and e["id"] in self.cards:  # slack_file not accepted -> static card
+                if code == "invalid_blocks" and e and e["id"] in self.cards and self._pending_card_ref:  # slack_file refused -> static card
                     self.card_failed.add(e["id"]); self.cards.pop(e["id"], None)
                 self.dirty = True; return self._fail("update", ex)
-            self.dirty, self.last, self.last_phase, self.last_error = False, now, ph, None
-            self.updates += 1; return True
+            self.dirty, self.last, self.last_phase, self.last_card_ref = False, now, ph, self._pending_card_ref
+            self._ok(); self.updates += 1; return True
 
     def run(self, period=0.25):
         def loop():
