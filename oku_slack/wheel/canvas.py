@@ -8,7 +8,8 @@ TITLE = "OKÚ Kolo · živě"
 KV_KEY = "canvas_id"
 SOFT_ERRORS = {"missing_scope", "not_in_channel", "channel_not_found", "not_allowed_token_type", "canvas_disabled_user_team",
                "restricted_action", "access_denied", "free_teams_cannot_create_non_tabbed_canvases", "ratelimited"}
-STATE_CZ = {"pending": "čeká na potvrzení", "ready": "potvrzeno, čeká na start", "live": "🔴 běží", "done": "skončila", "expired": "propadla"}
+STATE_CZ = {"pending": "čeká na potvrzení", "ready": "potvrzeno, čeká na start", "live": "🔴 běží", "done": "skončila", "expired": "propadla",
+            "vetoed": "vetována"}
 
 def _err(e):
     r = getattr(e, "response", None)
@@ -52,7 +53,12 @@ def markdown(eng, image_url=None, now=None):
     for q in snap["sequences"]:
         st = [s for s in q["steps"] if now >= s["at"]]
         out.append(f"- 🔥 Běží: **{q['label']}** ({players[q['player']]['name']}) · {st[-1]['text'] if st else ''} · do {_hm(q['end_at'])}")
-    out += ["", "## 💬 Chat z roomky"]
+    out.append("")
+    try:
+        from ..world import view as world_view
+        out += world_view.canvas_section(eng)
+    except Exception as ex: log.warning("canvas world section failed: %s", type(ex).__name__)
+    out += ["## 💬 Chat z roomky"]
     chat = snap["chat"][-10:]
     out += [f"- **{players.get(c['player'], {}).get('name', c['player'])}** ({_hm(c['ts'])}): {c['text']}" for c in chat] or ["_zatím ticho_"]
     out += ["", f"_Aktualizováno {_hm(now)}. Animace a hudba v roomce._"]

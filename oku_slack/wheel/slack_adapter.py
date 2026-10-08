@@ -3,14 +3,14 @@ Uses a DEDICATED app (env SLACK_OKU_WHEEL_BOT_TOKEN / SLACK_OKU_WHEEL_APP_TOKEN,
 Socket Mode connection never steals events from the live persona bridge. Tokens are read from env, never logged."""
 import logging, os, time
 from . import canvas, engine, panel, render, personas, scenes as _scenes
-from ..world import log as world_log
+from ..world import log as world_log, view as world_view
 
 log = logging.getLogger("oku_wheel.slack")
 MODAL_ID = "kolo_confirm"
 HOSTS = {"monika": "Monika Babišová", "babis": "Andrej Babiš", "alenka": "Alenka", "bourak": "Bourák", "marty": "Marty", "peta": "Peťa", "kalousek": "Kalousek"}
 HELP = ("*/kolo* pošle ovládací panel · */kolo toc* otevře sázky a roztočí kolo (*/kolo toc <klíč>* vynutí událost bez sázek, pokud allow_force) · "
         "*/kolo sazka <klíč> <částka|all>* · */kolo potvrdit* (modál s kódem) · */kolo prikaz* nabitý příkaz (1× za 30 min) · "
-        "*/kolo zebricek* · */kolo stav*")
+        "*/kolo zebricek* · */kolo stav* · */kolo svet* stav světa OKÚ")
 PICKS = {}  # slack user -> last segment chosen in the panel select (fallback when the payload has no state)
 
 def env_token(name):
@@ -46,6 +46,8 @@ def _handle_command(eng, user_id, text, pick=None, via="slash"):
         parts = arg.split()
         if not parts or parts[0] == "panel":
             return {"text": "Ovládací panel kola posílám do kanálu.", "panel": True, "open_modal": False}
+        if parts[0] in ("svet", "svět", "world"):
+            return {"text": world_view.svet_text(eng, p), "open_modal": False}
         if parts[0] in ("zebricek", "žebříček", "body", "leaderboard"):
             rows = "\n".join(f"{i + 1}. {r['name']} · *{_pts(r['points'])}*" for i, r in enumerate(eng.eco.board()))
             return {"text": f"🏆 *Žebříček OKÚ korun*\n{rows}\n🪙 Ty máš {_pts(eng.eco.balance(p))}.", "open_modal": False}
@@ -92,7 +94,7 @@ def _handle_command(eng, user_id, text, pick=None, via="slash"):
         return {"text": f"✋ {err}", "open_modal": False}
 
 STATE_HUMAN = {"pending": "⏳ čeká na potvrzení", "ready": "✅ připraveno", "live": "🔴 běží",
-               "done": "🏁 skončeno", "expired": "💤 propadlo"}
+               "done": "🏁 skončeno", "expired": "💤 propadlo", "vetoed": "🙅 vetováno"}
 
 def status_text(eng, p, e, cd):
     name = lambda k: eng.cfg["players"].get(k, {}).get("name", k)
