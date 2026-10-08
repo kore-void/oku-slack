@@ -3,11 +3,23 @@ Clients only render server state; they get `now` in each message to compute cloc
 import asyncio, collections, json, logging, os, pathlib, time
 from aiohttp import web, WSMsgType
 from . import config, engine, render, store
+from ..world import log as world_log
 
 log = logging.getLogger("oku_wheel")
 STATIC = pathlib.Path(__file__).parent / "static"
 
 DEFAULT_ORIGINS = ("https://itzkore.cz", "https://www.itzkore.cz", "http://127.0.0.1", "http://localhost")
+# The named tunnel kolo-ws.itzkore.cz (cloudflared on this host) forwards EVERY path on :8797, and cloudflared
+# connects from 127.0.0.1, so the peer address alone cannot tell local from tunnelled. New world routes are therefore
+# loopback-only: local peer AND none of the proxy headers cloudflared/proxies add (decision D12, plan B13).
+PROXY_HEADERS = ("CF-Connecting-IP", "CF-Ray", "CF-IPCountry", "Cf-Warp-Tag-Id", "CF-Visitor", "X-Forwarded-For",
+                 "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-IP", "Forwarded")
+LOOPBACK = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
+
+def loopback_only(req):
+    """True only for direct local requests (not via the tunnel or any proxy)."""
+    if req.remote not in LOOPBACK: return False
+    return not any(h in req.headers for h in PROXY_HEADERS)
 
 def allowed_origins():
     env = os.environ.get("OKU_WHEEL_ORIGINS")
@@ -62,6 +74,10 @@ class Hub:
         return p if pl and k and k == pl.get("room_key") else None
 
     async def handle(self, p, msg):
+        with world_log.source("room"):  # diary rows made by room actions are tagged source=room
+            await self._handle(p, msg)
+
+    async def _handle(self, p, msg):
         t, eid, e = msg.get("type"), msg.get("event_id"), self.eng
         if t == "spin": ev = e.spin(p, force=msg.get("force") or None); await self.broadcast("spin", ev); self._notify("spin", ev)
         elif t == "code": ev = e.confirm_code(eid, p, msg.get("code")); await self.broadcast("confirm", ev); self._notify("confirm", ev)
@@ -103,7 +119,14 @@ def make_app(eng, notify=None, period=0.5, run_loop=True):
         hub.clients.pop(ws, None)
         return ws
 
-    async def state(req): return web.json_response(eng.snapshot())
+    async def state(req): return web.json_response(eng.snapshot())  # public on purpose (room feed, D12)
+    async def world(req):  # loopback-only (D12): never through the tunnel
+        if not loopback_only(req): return web.Response(status=403, text="forbidden")
+        snap = eng.world.snapshot(korun={k: eng.eco.balance(k) for k in eng.cfg["players"]})
+        if req.query.get("events"):
+            n = max(1, min(500, int(req.query.get("events") or 50) if str(req.query.get("events")).isdigit() else 50))
+            snap["events"] = eng.wlog.events(after_seq=max(0, snap["as_of_seq"] - n))
+        return web.json_response(snap)
     async def wheel_png(req):
         e = eng.active_event()
         return web.Response(body=render.png(eng.snapshot()["wheel"], e["target_angle"] if e else 0), content_type="image/png")
@@ -116,6 +139,7 @@ def make_app(eng, notify=None, period=0.5, run_loop=True):
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/config.js", config_js)
     app.router.add_get("/api/state", state)
+    app.router.add_get("/api/world", world)
     app.router.add_get("/wheel.png", wheel_png)
     app.router.add_get("/poster.png", poster)
     app.router.add_static("/static", STATIC)
@@ -132,11 +156,12 @@ def main():
     logging.basicConfig(level=logging.INFO)
     cfg = config.load()
     db = pathlib.Path(os.environ.get("OKU_WHEEL_DB") or config.ROOT / "logs" / "wheel.sqlite3"); db.parent.mkdir(exist_ok=True)
-    eng = engine.Engine(cfg, store.Store(db))
+    eng = engine.Engine(cfg, store.Store(db), world_jsonl=os.environ.get("OKU_WORLD_JSONL") or db.parent / "world.jsonl")
+    eng.wlog.backfill(eng.players())  # one-time import of pre-diary history (no-op once the diary has rows)
     notify = None
     if os.environ.get("OKU_WHEEL_SLACK") == "1":
         from . import slack_adapter
-        notify = slack_adapter.start(eng)  # Socket Mode with the Babiš app tokens; registers /kolo
+        notify = slack_adapter.start(eng)  # Socket Mode with the dedicated OKÚ Kolo app tokens; registers /kolo
     host, port = os.environ.get("OKU_WHEEL_HOST", "127.0.0.1"), int(os.environ.get("OKU_WHEEL_PORT", "8797"))
     web.run_app(make_app(eng, notify), host=host, port=port)
 

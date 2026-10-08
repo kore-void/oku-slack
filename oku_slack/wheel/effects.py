@@ -11,8 +11,11 @@ def veto_respin(eng, p, ctx):
     e = eng.active_event()
     if not e or e["state"] == "live": return {"ok": False, "text": "Není co vetovat."}
     e["state"] = "vetoed"; e["vetoed_by"] = p
-    if e.get("round_id") and not e.get("revealed", True): eng.eco.refund(e["round_id"], "veto: vrácená sázka")
+    if e.get("round_id") and not e.get("revealed", True):
+        n = eng.eco.refund(e["round_id"], "veto: vrácená sázka")
+        eng.record("bets.refunded", None, f"round:{e['round_id']}", {"count": n, "reason": "veto"})
     eng.store.put_event(e)
+    eng._erec("wheel.vetoed", e, p, confirmed=sorted(e["confirmed"]))
     new = eng.spin(p, respin_of=e["id"])
     eng.emit("spin", new)
     return {"ok": True, "text": f"🙅 Veto! *{e['title']}* padá, kolo se točí znovu.", "respin": new["id"]}

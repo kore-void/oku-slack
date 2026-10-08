@@ -3,6 +3,7 @@ Uses a DEDICATED app (env SLACK_OKU_WHEEL_BOT_TOKEN / SLACK_OKU_WHEEL_APP_TOKEN,
 Socket Mode connection never steals events from the live persona bridge. Tokens are read from env, never logged."""
 import logging, os, time
 from . import canvas, engine, panel, render, personas, scenes as _scenes
+from ..world import log as world_log
 
 log = logging.getLogger("oku_wheel.slack")
 MODAL_ID = "kolo_confirm"
@@ -28,12 +29,18 @@ def _hm(ts): return time.strftime("%H:%M", time.localtime(ts))
 
 def _pts(n): return panel._pts(n)
 
-def handle_command(eng, user_id, text, pick=None):
+def handle_command(eng, user_id, text, pick=None, via="slash"):
     """Returns {"text": ephemeral reply ('' = silent), "open_modal": bool, "spin": event|None, "seq": sequence|None,
-    "round": betting round|None, "changed": bool (panel should re-render)}."""
+    "round": betting round|None, "changed": bool (panel should re-render)}. Diary source = 'slack'."""
+    with world_log.source("slack"):
+        return _handle_command(eng, user_id, text, pick, via)
+
+def _handle_command(eng, user_id, text, pick=None, via="slash"):
     p = eng.player_by_slack(user_id)
     if p is None: return {"text": "Nejsi v seznamu hráčů (players.toml).", "open_modal": False}
     arg = (text or "").strip().lower()
+    sub = (arg.split() or ["panel"])[0]
+    if sub != "pick": eng.record("ui.kolo", p, None, {"sub": sub[:16], "via": via})  # subcommand name only, never args/text
     titles = {x["key"]: x["title"] for x in eng.cfg["events"]}
     try:
         parts = arg.split()
@@ -117,7 +124,9 @@ def handle_modal(eng, user_id, event_id, code):
     """Returns None on success, or {block_id: error} for Slack response_action=errors."""
     p = eng.player_by_slack(user_id)
     if p is None: return {"code": "Nejsi hráč."}
-    try: eng.confirm_code(event_id, p, code); return None
+    try:
+        with world_log.source("slack"): eng.confirm_code(event_id, p, code)
+        return None
     except engine.WheelError as err: return {"code": str(err)}
 
 def _host(obj):
@@ -185,7 +194,7 @@ def handle_action(eng, client, body, post=None, pnl=None):
     pick = None
     try: pick = body["state"]["values"]["kolo_bets"]["kolo_bet_pick"]["selected_option"]["value"]
     except (KeyError, TypeError): pass
-    r = handle_command(eng, user, arg, pick=pick)
+    r = handle_command(eng, user, arg, pick=pick, via="button")
     try:
         if r.get("open_modal"):
             client.views_open(trigger_id=body["trigger_id"], view=modal_view(eng.active_event()))
@@ -204,9 +213,11 @@ def on_reaction(eng, pnl, scenes, channel, event, delta):
     """Hype meter: reactions on the panel or on the live scene's messages (needs reactions:read + events)."""
     item = event.get("item") or {}
     if item.get("type") != "message" or item.get("channel") != channel: return False
-    ts = item.get("ts"); tracked = {eng.store.kv_get("panel_ts")} | (scenes.tracked_ts() if scenes else set())
+    ts = item.get("ts"); panel_ts = eng.store.kv_get("panel_ts")
+    tracked = {panel_ts} | (scenes.tracked_ts() if scenes else set())
     if ts not in tracked: return False
-    ok = eng.hype(delta)
+    with world_log.source("slack"):  # diary row for every tracked reaction; hype only while live
+        ok = eng.reaction(eng.player_by_slack(event.get("user")), event.get("reaction"), delta, "panel" if ts == panel_ts else "scene")
     if ok and pnl: pnl.request()
     return ok
 
