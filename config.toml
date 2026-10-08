@@ -68,7 +68,7 @@ dm_user = "U0C6XAN3EG3"
 
 # One-off "awaiting reply" for Babiš's #čapák post to ICIK (state in logs/capak_followup.json; never resends).
 [capak_followup]
-enabled = true
+enabled = false         # D12: finished (logs/capak_followup.json "done": "timeout"); kept for reference only
 channel = "C0C76PTMJ9Z"
 user = "U0C75FSEK2M"
 anchor_ts = "1791365300.705149"

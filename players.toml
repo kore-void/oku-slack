@@ -11,7 +11,7 @@ confirm_quorum = 1       # D1: confirmations needed to go live (1 = any one play
 hold_min_s = 2.0         # press-and-hold confirmation threshold
 spin_ms = 6000           # wheel spin animation length in the room
 slack_channel = "C0C6W8E6NP9"  # oku-porada: alarms/results
-allow_force = true      # testing: allow forced spins (set false in production)
+allow_force = false     # D10: forced spins off in production (room hides "Vynutit legendu"); tests enable it themselves
 nag_before_s = 120      # host nags missing players this long before start
 # --- v2: OKÚ korun (points), bets, charged-command effects, live show ---
 start_points = 1000     # every player starts with this many OKÚ korun (balance = start + ledger)
@@ -111,8 +111,8 @@ color = "#27ae60"
 music_url = ""
 
 # LEGENDARY: rare event with a scripted cinematic scene (oku_slack/wheel/events/<script>.toml).
-# Tune `weight` (relative to the others above). Force for testing: /kolo toc snemovna, room "Vynutit legendu"
-# (only when settings.allow_force = true) or Engine.spin(force="snemovna").
+# Tune `weight` (relative to the others above). Force for testing (only when settings.allow_force = true, which is
+# off in production): /kolo toc snemovna, room "Vynutit legendu" (hidden otherwise) or Engine.spin(force="snemovna").
 [[events]]
 key = "snemovna"
 title = "Mimořádná schůze sněmovny"

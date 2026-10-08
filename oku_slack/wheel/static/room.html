@@ -19,7 +19,7 @@ body.offline main{opacity:.55} body.offline #ev{color:#f1c40f}
   <div id="host"></div>
   <div id="ev">Připojuji…</div>
   <canvas id="c" width="460" height="460"></canvas><canvas id="cine"></canvas>
-  <div class="row"><button id="spin">Roztočit</button><button id="force" title="test: allow_force">🌟 Vynutit legendu</button><button id="sound">🔊 Zapnout zvuk</button></div>
+  <div class="row"><button id="spin">Roztočit</button><button id="force" title="test: allow_force" style="display:none">🌟 Vynutit legendu</button><button id="sound">🔊 Zapnout zvuk</button></div>
   <div class="row" id="confirm"><input id="code" maxlength="4" size="5" placeholder="KÓD"><button id="sendcode">Potvrdit kódem</button>
     <button id="hold"><span id="holdbar"></span>Podrž 2 s pro potvrzení</button></div>
   <div class="row"><button id="cmd">⚡ Nabitý příkaz</button><span id="cd"></span></div>
@@ -111,6 +111,7 @@ function renderUI(){ if(!S) return; const e=S.event;
   $('host').innerHTML=e&&e.host_say?`<b>${esc(e.host_say.name)}:</b> ${esc(e.host_say.text)}`:'<b>Monika Babišová:</b> Nastupovat, kolotoč čeká!';
   $('ev').innerHTML=e?`<b>${esc(e.title)}</b> – ${e.state} – start ${hm(e.start_at)}${e.code?` · kód <b>${e.code}</b>`:''}<br>potvrdili: ${Object.keys(e.confirmed).join(', ')||'nikdo'}`:'Žádná událost. Roztoč kolo!';
   $('confirm').style.display=(e&&(e.state==='pending'||e.state==='ready')&&you&&!e.confirmed[you])?'flex':'none';
+  $('force').style.display=(S.settings.allow_force&&you)?'':'none';  // D10: hidden unless allow_force (off in production)
   $('players').textContent=Object.entries(S.players).map(([k,v])=>v.name).join(' · ');}
 function tickUI(){ if(!S) return; const now=srvNow();
   if(you){const left=Math.max(0,S.players[you].cooldown_left-(now-S.now)); $('cd').textContent=left>0?`nabíjí se ${Math.floor(left/60)}:${String(Math.floor(left%60)).padStart(2,'0')}`:'připraven'; $('cmd').disabled=left>0}
