@@ -1,26 +1,34 @@
-"""P-001 World v0: append-only world_events diary (engine/Slack/room hooks, JSONL mirror, backfill), read-only
-projection (rebuild == incremental), loopback-only /api/world (D12/B13). Fakes only; no network."""
+"""P-001 wheel at the edge: the wheel only hands diary drafts to the world through logs/outbox/wheel.jsonl
+(world_client), the oku_world service ingests them (source=wheel, payload.via, dedupe) and projects the state.
+The wheel holds/renders no world state and no longer serves /api/world. Fakes only; no network."""
 import asyncio, json, random
 from oku_slack.wheel import config, engine, server, store, slack_adapter as SA
-from oku_slack.world import state as wstate
+from oku_slack.world import ingest, log as wlog, state as wstate
 
 class Clock:
-    def __init__(self, t=6_000_000.0): self.t = t
+    def __init__(self, t=1_800_000_000.0): self.t = t
     def __call__(self): return self.t
     def adv(self, s): self.t += s
 
-def mk(jsonl=None, **s):
+def mk(outbox=None, **s):
     clk = Clock(); cfg = config.load(); cfg["settings"].update(s); st = store.Store()
-    return engine.Engine(cfg, st, clock=clk, rng=random.Random(3), world_jsonl=jsonl), st, clk
+    return engine.Engine(cfg, st, clock=clk, rng=random.Random(3), world_outbox=outbox), st, clk
 
 KORE, ICIK = "U0C6XAN3EG3", "U0C75FSEK2M"
 def T(x): return json.dumps(x, ensure_ascii=False)
-def img(call): return [b for b in call[1]["blocks"] if b["type"] == "image"]
 def types(e, **filt): return [ev["type"] for ev in e.wlog.events() if all(ev.get(k) == v for k, v in filt.items())]
 
-# ---------------- world diary ----------------
-def test_diary_full_flow_engine_events_bets_commands_show(tmp_path):
-    e, st, clk = mk(jsonl=tmp_path / "world.jsonl", bet_window_s=30)
+def world_of(e, clk):
+    """Feed the wheel's rows into a fresh world diary (as the oku_world WheelOutbox tail does)."""
+    d = wlog.Diary(clock=clk, version="test")
+    for r in e.wlog.events():
+        st, _ = d.ingest({k: r.get(k) for k in ("type", "source", "actor", "subject", "payload", "ts", "dedupe_key")}); assert st == "ok", st
+    return d, wstate.World(d, wstate.ctx_from_cfg(e.cfg), clk)
+
+# ---------------- wheel -> outbox ----------------
+def test_wheel_rows_go_to_the_outbox_and_the_world_ingests_them(tmp_path):
+    ob = tmp_path / "outbox" / "wheel.jsonl"
+    e, st, clk = mk(outbox=ob, bet_window_s=30)
     SA.handle_command(e, KORE, "toc")                               # bets.open (slack)
     SA.handle_command(e, ICIK, "sazka porada 100")                 # bet.placed (slack)
     clk.adv(31); out = dict(e.tick()); ev = out["spin"]            # wheel.spin
@@ -37,37 +45,52 @@ def test_diary_full_flow_engine_events_bets_commands_show(tmp_path):
     for must in ("bets.open", "bet.placed", "wheel.spin", "wheel.reveal", "bet.settled", "wheel.confirm", "wheel.ready",
                  "wheel.alarm", "wheel.live", "show.vote", "show.catch", "show.quiz", "command.used", "wheel.done", "ui.kolo"):
         assert must in ts, must
-    rows = e.wlog.events(); spin = [r for r in rows if r["type"] == "wheel.spin"][0]
-    assert rows[0]["id"] == "we_0001" and [r["seq"] for r in rows] == list(range(1, len(rows) + 1))
-    assert all(r["causal_parents"] == [spin["id"]] for r in rows if r["subject"] == spin["subject"] and r is not spin)
-    conf = [r for r in rows if r["type"] == "wheel.confirm"][0]
-    assert conf["source"] == "slack" and conf["actor"] == "kore" and conf["payload"]["how"] == "code" and conf["payload"]["on_time"]
-    assert [r for r in rows if r["type"] == "wheel.live"][0]["source"] == "engine"
-    assert {r["regime"] for r in rows} == {"A_scarce"} and all(r["content_version"] for r in rows)
-    lines = (tmp_path / "world.jsonl").read_text(encoding="utf-8").splitlines()
-    assert len(lines) == len(rows) and json.loads(lines[0])["id"] == "we_0001"
+    lines = [json.loads(x) for x in ob.read_text(encoding="utf-8").splitlines()]
+    assert len(lines) == len(e.wlog.events()) and all(x["source"] == "wheel" and x["dedupe_key"].startswith("wheel:") for x in lines)
+    assert all((x["subject"] or "wheel:").startswith("wheel:") for x in lines)
+    conf = [x for x in lines if x["type"] == "wheel.confirm"][0]
+    assert conf["payload"]["via"] == "slack" and conf["actor"] == "kore" and conf["payload"]["how"] == "code" and conf["payload"]["on_time"]
+    assert [x for x in lines if x["type"] == "wheel.live"][0]["payload"]["via"] == "engine"
+    # the world side: tail -> diary (ids, causal parents) -> projection; a second poll is a no-op
+    d = wlog.Diary(tmp_path / "w.sqlite3", jsonl=tmp_path / "world.jsonl", clock=clk, version="test")
+    src = ingest.WheelOutbox(d, ob)
+    r = src.poll(); assert r["ok"] == len(lines) and r["invalid"] == 0 and src.poll()["ok"] == 0
+    rows = d.events(); spin = [x for x in rows if x["type"] == "wheel.spin"][0]
+    assert rows[0]["id"] == "we_0001" and all(x["source"] == "wheel" for x in rows)
+    assert all(x["causal_parents"] == [spin["id"]] for x in rows if x["subject"] == spin["subject"] and x is not spin)
+    s = wstate.World(d, wstate.ctx_from_cfg(e.cfg), clk).state()
+    assert s["totals"]["spun"] == 1 and s["totals"]["done"] == 1 and s["players"]["kore"]["stats"]["catches"] == 1
+    assert s["totals"]["human_actions"] > 0 and s["sources"]["wheel"]["events"] == len(lines)
 
-def test_diary_reactions_room_source_and_no_free_text():
+def test_reactions_room_via_and_no_free_text():
     e, st, clk = mk(); st.kv_set("panel_ts", "100.1"); ev = e.spin("kore", force="porada", lead_s=0)
     e.confirm_code(ev["id"], "kore", ev["code"]); clk.adv(7); e.tick()
     r = {"item": {"type": "message", "channel": "C0C6W8E6NP9", "ts": "100.1"}, "user": ICIK, "reaction": "fire"}
     assert SA.on_reaction(e, None, None, "C0C6W8E6NP9", r, +1)
     x = [q for q in e.wlog.events() if q["type"] == "reaction"][-1]
-    assert x["actor"] == "icik" and x["source"] == "slack" and x["payload"] == {"reaction": "fire", "delta": 1, "target": "panel", "hype": True}
+    assert x["actor"] == "icik" and x["payload"] == {"reaction": "fire", "delta": 1, "target": "panel", "hype": True, "via": "slack"}
     asyncio.run(server.Hub(e).handle("kore", {"type": "chat", "text": "tajná zpráva"}))
     c = [q for q in e.wlog.events() if q["type"] == "room.chat"][-1]
-    assert c["source"] == "room" and c["actor"] == "kore" and "tajná" not in T(e.wlog.events())
+    assert c["payload"]["via"] == "room" and c["actor"] == "kore" and "tajná" not in T(e.wlog.events())
 
-def test_diary_never_breaks_the_wheel():
+def test_outbox_failure_never_breaks_the_wheel(tmp_path):
+    blocker = tmp_path / "file"; blocker.write_text("x")
+    e, st, clk = mk(outbox=blocker / "sub" / "wheel.jsonl")       # parent is a file: every append fails
+    ev = e.spin("kore", force="porada"); assert ev["state"] == "pending" and e.wlog.failures >= 1
+
+def test_wheel_has_no_world_state_and_no_world_route():
     e, st, clk = mk()
-    class Boom:
-        lock = st.lock
-        @property
-        def db(self): raise RuntimeError("disk full")
-    e.wlog.store = Boom()
-    ev = e.spin("kore", force="porada"); assert ev["state"] == "pending"   # recording failed silently
+    assert not hasattr(e, "world")
+    from aiohttp.test_utils import TestServer, TestClient
+    async def run():
+        c = TestClient(TestServer(server.make_app(e, run_loop=False))); await c.start_server()
+        try:
+            assert (await c.get("/api/world")).status == 404
+            assert (await c.get("/api/state")).status == 200
+        finally: await c.close()
+    asyncio.run(run())
 
-# ---------------- world projection ----------------
+# ---------------- projection over wheel rows (now in the world) ----------------
 def _history(e, clk):
     ev = e.spin("kore", force="porada", lead_s=10); clk.adv(71); e.tick()          # expired, both missed
     e.use_command("icik")                                                           # steal: Kalousek takes the blame
@@ -76,8 +99,8 @@ def _history(e, clk):
     return ev, ev2
 
 def test_projection_blame_witnessed_acts_stats_and_seeds():
-    e, st, clk = mk(); _history(e, clk); s = e.world.state()
-    assert s["resources"] == {"dotace": 5000, "kampan": 35, "hranolky": 80, "lajky": 1200}   # no consequences in P-001
+    e, st, clk = mk(); _history(e, clk); d, w = world_of(e, clk); s = w.state()
+    assert s["resources"] == {"dotace": 5000, "kampan": 35, "hranolky": 80, "lajky": 1200}   # no consequences yet
     assert s["blame"] == {"kore": 1, "icik": 1, "kalousek": 1}
     assert s["totals"]["spun"] == 2 and s["totals"]["expired"] == 1 and s["totals"]["live"] == 1 and s["totals"]["done"] == 1
     kore = s["players"]["kore"]; icik = s["players"]["icik"]
@@ -87,49 +110,23 @@ def test_projection_blame_witnessed_acts_stats_and_seeds():
     assert icik["witnessed_acts"]["kalousek"][0]["act"].startswith("command:Kalousek za to může:")
     assert s["personas"]["babis"]["expired"] == 1 and s["personas"]["alenka"]["done"] == 1
     assert [x["state"] for x in s["recent"]] == ["expired", "done"]
+    assert {m["type"] for m in s["memory"]["babis"]} >= {"wheel.spin", "wheel.expired"} and s["actors"]["kore"]["kind"] == "player"
 
 def test_projection_rebuild_from_scratch_equals_incremental():
     e, st, clk = mk(); e.spin("kore", force="porada", lead_s=10); clk.adv(71); e.tick()
-    mid = e.world.state(); assert mid["as_of_seq"] > 0                               # cached
+    d, w = world_of(e, clk); mid = w.state(); assert mid["as_of_seq"] > 0
+    n0 = len(e.wlog.events())
     e.use_command("icik"); ev = e.spin("icik", force="socky", lead_s=0); e.confirm_code(ev["id"], "kore", ev["code"]); clk.adv(7); e.tick()
-    inc = json.loads(json.dumps(e.world.state()))
-    assert inc == json.loads(json.dumps(e.world.rebuild())) == json.loads(json.dumps(wstate.project(e.wlog.events(), e.world.ctx)))
+    for r in e.wlog.events()[n0:]: d.ingest({k: r.get(k) for k in ("type", "source", "actor", "subject", "payload", "ts", "dedupe_key")})
+    inc = json.loads(json.dumps(w.state()))
+    assert inc == json.loads(json.dumps(w.rebuild())) == json.loads(json.dumps(wstate.project(d.events(), w.ctx)))
 
 def test_world_delta_clamped_and_metrics_window():
-    st0 = wstate.initial(); ev = lambda seq, t, ts, **pl: {"seq": seq, "id": f"we_{seq:04d}", "type": t, "ts": ts, "payload": pl, "source": "engine"}
+    st0 = wstate.initial(); ev = lambda seq, t, ts, **pl: {"seq": seq, "id": f"we_{seq:04d}", "type": t, "ts": ts, "payload": pl, "source": "wheel"}
     s = wstate.project([ev(1, "world.delta", 1, resource="kampan", delta=500), ev(2, "world.delta", 2, resource="dotace", delta=-200)])
     assert s["resources"]["kampan"] == 100 and s["resources"]["dotace"] == 4800 and st0["resources"]["kampan"] == 35
     m = wstate.metrics([ev(1, "wheel.spin", 10), ev(2, "wheel.spin", 1000), ev(3, "wheel.live", 1001)], since_ts=500)
     assert m["spun"] == 1 and m["live"] == 1 and m["live_rate"] == 1.0
-
-def test_backfill_imports_pre_diary_history_once():
-    e, st, clk = mk(bet_window_s=30); SA.handle_command(e, KORE, "toc"); e.bet("kore", "disko", 250)
-    clk.adv(31); e.tick(); clk.adv(7); e.tick(); clk.adv(700); e.tick()          # spin, settle, expire
-    with st.lock: st.db.execute("delete from world_events"); st.db.commit()       # = a DB from before P-001
-    n = e.wlog.backfill(e.players()); assert n >= 4
-    assert set(types(e)) >= {"wheel.spin", "wheel.expired", "bet.placed", "bet.settled"} and set(types(e, source="backfill")) == set(types(e))
-    s = e.world.rebuild(); assert s["totals"]["spun"] == 1 and s["totals"]["expired"] == 1 and s["blame"] == {"icik": 1, "kore": 1}
-    assert e.wlog.backfill(e.players()) == 0                                          # once
-
-def test_snapshot_persisted_to_kv():
-    e, st, clk = mk(); _history(e, clk)
-    snap = e.world.snapshot(korun={"kore": 1, "icik": 2}); kv = json.loads(st.kv_get("world:snapshot"))
-    assert kv == json.loads(json.dumps(snap)) and kv["metrics_7d"]["spun"] == 2 and kv["players"]["icik"]["korun"] == 2
-
-# ---------------- D12 / B13: new world route is loopback-only ----------------
-def test_api_world_loopback_only_state_stays_public():
-    from aiohttp.test_utils import TestServer, TestClient
-    async def run():
-        e, st, clk = mk(); e.spin("kore", force="porada")
-        c = TestClient(TestServer(server.make_app(e, run_loop=False))); await c.start_server()
-        try:
-            r = await c.get("/api/world?events=5"); assert r.status == 200
-            j = await r.json(); assert j["resources"]["dotace"] == 5000 and j["events"][0]["type"] == "wheel.spin"
-            for h in ({"CF-Connecting-IP": "203.0.113.9"}, {"X-Forwarded-For": "203.0.113.9"}, {"CF-Ray": "abc"}):
-                assert (await c.get("/api/world", headers=h)).status == 403, h
-            assert (await c.get("/api/state", headers={"CF-Connecting-IP": "203.0.113.9"})).status == 200
-        finally: await c.close()
-    asyncio.run(run())
 
 def test_loopback_only_rejects_remote_peer():
     class R:

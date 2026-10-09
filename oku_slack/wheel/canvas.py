@@ -54,10 +54,6 @@ def markdown(eng, image_url=None, now=None):
         st = [s for s in q["steps"] if now >= s["at"]]
         out.append(f"- 🔥 Běží: **{q['label']}** ({players[q['player']]['name']}) · {st[-1]['text'] if st else ''} · do {_hm(q['end_at'])}")
     out.append("")
-    try:
-        from ..world import view as world_view
-        out += world_view.canvas_section(eng)
-    except Exception as ex: log.warning("canvas world section failed: %s", type(ex).__name__)
     out += ["## 💬 Chat z roomky"]
     chat = snap["chat"][-10:]
     out += [f"- **{players.get(c['player'], {}).get('name', c['player'])}** ({_hm(c['ts'])}): {c['text']}" for c in chat] or ["_zatím ticho_"]

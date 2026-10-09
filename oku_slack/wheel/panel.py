@@ -65,14 +65,6 @@ def image_block(e, ph, base=IMG_BASE, card=None):
         url = f"{base}card-{e['key']}.png?v={e['id']}"
     return {"type": "image", "image_url": url, "alt_text": title, "title": {"type": "plain_text", "text": title[:2000]}}
 
-def world_block(eng):
-    """One context line with the world state (P-001, read-only). Never breaks the panel."""
-    try:
-        from ..world import view
-        return {"type": "context", "elements": [{"type": "mrkdwn", "text": _t(view.panel_line(eng))}]}
-    except Exception as ex:
-        log.warning("panel world line failed: %s", type(ex).__name__); return None
-
 def blocks(eng, now=None, base=IMG_BASE, card=None, images=True):
     """Pure: Block Kit for the panel (<= 50 blocks, never the event code). Returns (blocks, phase).
     images=False: text-only degrade (the image block becomes a context line with its title)."""
@@ -119,8 +111,6 @@ def blocks(eng, now=None, base=IMG_BASE, card=None, images=True):
     if e and ph == "result" and e.get("bets_result"):
         b.append({"type": "context", "elements": [{"type": "mrkdwn", "text": _t(bets_result_text(eng, e))}]})
     b.append(leaderboard_block(snap))
-    wb = world_block(eng)
-    if wb: b.append(wb)
     b.append({"type": "divider"})
     btns = [{"type": "button", "action_id": "kolo_spin", "style": "primary", "text": {"type": "plain_text", "text": "🎡 Točit"}}]
     if e and e["state"] in ("pending", "ready") and ph == "result":  # ready: further players may still join

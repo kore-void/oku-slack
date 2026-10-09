@@ -10,8 +10,9 @@ STATIC = pathlib.Path(__file__).parent / "static"
 
 DEFAULT_ORIGINS = ("https://itzkore.cz", "https://www.itzkore.cz", "http://127.0.0.1", "http://localhost")
 # The named tunnel kolo-ws.itzkore.cz (cloudflared on this host) forwards EVERY path on :8797, and cloudflared
-# connects from 127.0.0.1, so the peer address alone cannot tell local from tunnelled. New world routes are therefore
+# connects from 127.0.0.1, so the peer address alone cannot tell local from tunnelled. Local-only routes are therefore
 # loopback-only: local peer AND none of the proxy headers cloudflared/proxies add (decision D12, plan B13).
+# World state is no longer served here: /api/world moved to the oku_world service (127.0.0.1:8798, P-001).
 PROXY_HEADERS = ("CF-Connecting-IP", "CF-Ray", "CF-IPCountry", "Cf-Warp-Tag-Id", "CF-Visitor", "X-Forwarded-For",
                  "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-IP", "Forwarded")
 LOOPBACK = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
@@ -149,13 +150,6 @@ def make_app(eng, notify=None, period=0.5, run_loop=True, commit=None):
 
     async def state(req):  # public on purpose (room feed, D12); `commit` = running git sha (short)
         return web.json_response(dict(eng.snapshot(), commit=app["commit"]))
-    async def world(req):  # loopback-only (D12): never through the tunnel
-        if not loopback_only(req): return web.Response(status=403, text="forbidden")
-        snap = eng.world.snapshot(korun={k: eng.eco.balance(k) for k in eng.cfg["players"]})
-        if req.query.get("events"):
-            n = max(1, min(500, int(req.query.get("events") or 50) if str(req.query.get("events")).isdigit() else 50))
-            snap["events"] = eng.wlog.events(after_seq=max(0, snap["as_of_seq"] - n))
-        return web.json_response(snap)
     async def wheel_png(req):
         e = eng.active_event()
         return web.Response(body=render.png(eng.snapshot()["wheel"], e["target_angle"] if e else 0), content_type="image/png")
@@ -168,7 +162,6 @@ def make_app(eng, notify=None, period=0.5, run_loop=True, commit=None):
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/config.js", config_js)
     app.router.add_get("/api/state", state)
-    app.router.add_get("/api/world", world)
     app.router.add_get("/wheel.png", wheel_png)
     app.router.add_get("/poster.png", poster)
     app.router.add_static("/static", STATIC)
@@ -187,8 +180,8 @@ def main():
     log.info("oku_wheel starting: commit=%s log=%s", commit, path)
     cfg = config.load()
     db = pathlib.Path(os.environ.get("OKU_WHEEL_DB") or config.ROOT / "logs" / "wheel.sqlite3"); db.parent.mkdir(exist_ok=True)
-    eng = engine.Engine(cfg, store.Store(db), world_jsonl=os.environ.get("OKU_WORLD_JSONL") or db.parent / "world.jsonl")
-    eng.wlog.backfill(eng.players())  # one-time import of pre-diary history (no-op once the diary has rows)
+    # world diary rows go to the outbox that oku_world tails (the wheel never writes world state itself)
+    eng = engine.Engine(cfg, store.Store(db), world_outbox=os.environ.get("OKU_WORLD_OUTBOX") or db.parent / "outbox" / "wheel.jsonl")
     notify = None
     if os.environ.get("OKU_WHEEL_SLACK") == "1":
         from . import slack_adapter

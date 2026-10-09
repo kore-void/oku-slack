@@ -1,2 +1,4 @@
-"""OKÚ World layer (ECOSYSTEM-PLAN.md section 3): append-only diary `world_events` + read-only projections.
-Lives inside the oku_wheel process (decision D2). P-001: telemetry + state view only, no consequences, no posts."""
+"""OKÚ World core (docs/ECOSYSTEM-PLAN.md, docs/WORLD.md): the `oku_world` service (python -m oku_slack.world.service,
+loopback 127.0.0.1:8798) owns the append-only diary (logs/world.sqlite3 + world.jsonl), the read-only projection,
+budgets/quiet hours/kill switch and the storylet scheduler (standalone weekday porada). Event sources (wheel outbox,
+usage.jsonl, schedule, ...) only hand it diary drafts. The wheel is one optional source at the edge."""

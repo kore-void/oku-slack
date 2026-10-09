@@ -47,7 +47,7 @@ def _handle_command(eng, user_id, text, pick=None, via="slash"):
         if not parts or parts[0] == "panel":
             return {"text": "Ovládací panel kola posílám do kanálu.", "panel": True, "open_modal": False}
         if parts[0] in ("svet", "svět", "world"):
-            return {"text": world_view.svet_text(eng, p), "open_modal": False}
+            return {"text": world_view.svet_remote(eng, p), "open_modal": False}
         if parts[0] in ("zebricek", "žebříček", "body", "leaderboard"):
             rows = "\n".join(f"{i + 1}. {r['name']} · *{_pts(r['points'])}*" for i, r in enumerate(eng.eco.board()))
             return {"text": f"🏆 *Žebříček OKÚ korun*\n{rows}\n🪙 Ty máš {_pts(eng.eco.balance(p))}.", "open_modal": False}

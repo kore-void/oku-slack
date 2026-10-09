@@ -2,14 +2,15 @@
 tick() advances the state machine and returns notifications for the Slack adapter / room hub."""
 import json, random, string, threading, time, uuid
 from . import economy, effects, show
-from ..world import log as world_log, state as world_state
+from .world_client import WorldClient
 
 # Event states: pending -> (confirm_quorum players confirmed) ready -> (start_at reached) live -> done
 #               pending -> (start_at + confirm_wait_s, quorum not reached) expired
 #               pending/ready -> (charged veto_respin) vetoed
 # settings.confirm_quorum (decision D1, default 1): how many players must confirm; 0 or >= player count = ALL.
 # Other players may still confirm (join) while the event is ready. Event start = max(start_at, quorum moment).
-# Every state change and player action is also appended to the world diary (oku_slack.world.log, P-001).
+# Every state change and player action is also handed to the world as an outbox row (wheel/world_client.py); the
+# wheel is an optional event source at the edge and never holds or renders world state (ECOSYSTEM-PLAN P-001).
 # Betting round (kv "round"): Točit opens a bet_window_s window; when it closes the tick spins the wheel and the
 # round's bets are settled at reveal. All public mutations hold self.lock (Slack threads + tick loop).
 SEQ_STEPS = [(0, "Nabíjím..."), (30, "Čau lidi!"), (60, "Kampaň běží"), (90, "Finále"), (110, "Dojezd")]
@@ -19,19 +20,18 @@ class WheelError(Exception):
     def __init__(self, code, msg=""): super().__init__(msg or code); self.code = code
 
 class Engine:
-    def __init__(self, cfg, store, clock=time.time, rng=None, world_jsonl=None):
+    def __init__(self, cfg, store, clock=time.time, rng=None, world_outbox=None):
         self.cfg, self.s, self.store, self.clock = cfg, cfg["settings"], store, clock
         self.rng = rng or random.SystemRandom()
         self.holds = {}  # (event_id, player) -> start ts (server time)
         self.lock = threading.RLock()
         self.outbox = []  # notifications queued by actions/effects; drained by tick()
         self.eco = economy.Economy(cfg, store, clock)
-        self.wlog = world_log.WorldLog(store, clock, regime=self.s.get("world_regime", "A_scarce"),
-                                       run_id=self.s.get("world_run_id", "oku-world-1"), jsonl=world_jsonl)
-        self.world = world_state.World(self.wlog, cfg, store, clock)
+        self.wlog = WorldClient(world_outbox, clock, regime=self.s.get("world_regime", "A_scarce"),
+                                run_id=self.s.get("world_run_id", "oku-world-1"))
 
     def record(self, type, actor=None, subject=None, payload=None, **kw):
-        """Append to the world diary (never raises)."""
+        """Hand a diary row to the world via the outbox (never raises, never blocks on the world)."""
         return self.wlog.record(type, actor, subject, payload, **kw)
 
     def _erec(self, type, e, actor=None, **payload):
