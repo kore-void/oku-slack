@@ -1,6 +1,6 @@
 # OKÚ Ecosystem Plan v2: a world-centric living ecosystem (the wheel is a bonus minigame)
 
-Status: PROPOSAL v2 for Kore, written 2026-10-08 on branch `feat/wheel-of-fortune` (7 local commits `a207d6b..50c1599`, not pushed, not deployed).
+Status: v2, written 2026-10-08 on branch `feat/wheel-of-fortune`. **Update 2026-10-09: P-001 is DONE on branch `feat/oku-world`** (git worktree `C:\code\oku-slack-world`, pushed, not merged, not deployed; §3.1), plus a **standalone scheduled porada** that is independent of the wheel (§3.2). Ops reference: `docs/WORLD.md`.
 Supersedes v1 (commit `a207d6b`), which built the living world *around* the wheel. v1's full audit (25-mechanic table, bugs B1-B13, POST SCARCITY concept map) is still accurate for the wheel and stays in history: `git show a207d6b:docs/ECOSYSTEM-PLAN.md`.
 New direction from Kore (call 2026-10-08): **"The wheel must not be the center of everything; it's only a bonus minigame."** Further wishes from the call: autonomous bot-to-bot interaction between the OKÚ characters without human input; real-life triggers as diary-writing modules (a new Babiš X video gets reposted with a comment, a Macinka/Xavera stream announcement); and the whole ecosystem doubling as an experiment for future POST SCARCITY events.
 This document only plans the work. No code has been refactored yet. Effort numbers are estimates (UNVERIFIED). Anything not verified is marked **UNKNOWN**.
@@ -251,7 +251,7 @@ Effort is in focused dev-days with agent assistance (estimate, UNVERIFIED).
 | Phase | Scope | Effort | Slack posts added |
 |---|---|---|---|
 | **P-000** (done, local) | The 7 commits: wheel fixes + world v0 inside the wheel | — | none |
-| **P-001** World core carve-out | `service.py` (loopback :8798, `/healthz`, `/api/world`); `logs/world.sqlite3` + `dedupe_key`; `ingest.py` outbox tailing; `wheel/world_client.py`; engine hooks rewired; `/api/world` removed from the wheel; backfill from `wheel.sqlite3` read-only; `folds/wheel.py`; draft Heimdall manifest `oku_world.toml` (`autostart = false`; added to `services.d` only with Kore's OK); `docs/WORLD.md`. **Exit:** all wheel tests pass with `oku_world` stopped; diary rows arrive with `source=wheel`; a rebuild-from-scratch test passes | 1–1.5 d | none |
+| **P-001** ✅ DONE 2026-10-09 (`feat/oku-world`, §3.1) World core carve-out | `service.py` (loopback :8798, `/healthz`, `/api/world`); `logs/world.sqlite3` + `dedupe_key`; `ingest.py` outbox tailing; `wheel/world_client.py`; engine hooks rewired; `/api/world` removed from the wheel; backfill from `wheel.sqlite3` read-only; `folds/wheel.py`; draft Heimdall manifest `oku_world.toml` (`autostart = false`; added to `services.d` only with Kore's OK); `docs/WORLD.md`. **Exit:** all wheel tests pass with `oku_world` stopped; diary rows arrive with `source=wheel`; a rebuild-from-scratch test passes | 1–1.5 d | none |
 | **P-002** `/oku` + Slack activity + world surfaces | OKÚ Svět app manifest (Kore creates and installs it); `/oku svet\|denik\|proc`; `slack` source (reactions, message metadata, no text); `bridge` source (tail `usage.jsonl`); world canvas; `/kolo svet` pointer; panel/canvas world sections removed from the wheel. **Exit:** a test asserts no text field ever reaches the diary | 1 d | none (ephemeral only) |
 | **P-003** Persona agents, memory, budget | `agents.py`, `poster.py` (moved from `wheel/personas.py`, re-exported for the wheel), memory + relationship folds, `budget.py`, quiet hours, `/oku ticho`; optional `/api/world/brief` used by the bridge (failure → reply as today). Agents run in **dry-run** (they write `agent.dry_run` rows, post nothing). **Exit:** a 7-day fake-clock test never exceeds the budget | 1.5 d | none (dry-run) |
 | **P-004** Real-life triggers | `sources/x.py`, `sources/stream.py`, `sources/manual.py` + `/oku podnet`; fixed reaction rules `REPOST_VIDEO`, `STREAM_ANNOUNCE`; recorded-fixture tests (no live API in tests); `source.degraded` on 402/403/429. **Exit:** one real Babiš video reposted by Marty within 15 min, inside budget | 1–1.5 d | **yes**, ≤ 2/day from this source |
@@ -259,6 +259,34 @@ Effort is in focused dev-days with agent assistance (estimate, UNVERIFIED).
 | **P-006** Consequences + wheel bonus round | `consequences.toml` across all sources (e.g. a video repost → `lajky +`, chatter blame → `blame +1`, `wheel.done kantyna` → `hranolky +60`, `wheel.expired` → failure without game over); wheel `POST /api/invite` (loopback-only) + `BONUS_ROUND` storylet (≤ 1/day). **Exit:** the world runs a week of tests with the wheel off; invitations can be declined | 1 d | Monika invitation (wheel panel), ≤ 1/day |
 | **P-007** Commitments + economy regimes | `/oku slib`, `/oku rezim`, regime-aware surfaces; the wheel reads the regime; emoji choices on persona posts → `choice.*`. **Exit:** A/B/C end to end in tests; C shows no spendable score | 1–1.5 d | none new |
 | **P-008** Readout + POST SCARCITY export | `scripts/world_report.py` (H1–H6, cost, causal chains, per-source response), "Lessons for PS" | 0.5–1 d | none |
+
+### 3.1 P-001 as delivered (2026-10-09, branch `feat/oku-world`)
+- `oku_slack/world/service.py`: `python -m oku_slack.world.service` on **127.0.0.1:8798**. Every route (including `/healthz`) refuses peers other than `127.0.0.1` and any request with proxy/tunnel headers. Routes: `/healthz`, `/api/world`, `/api/budget`, `POST /api/events`. It uses the stdlib `http.server` instead of aiohttp, so it runs in `.venv` or `.venv-wheel`.
+- Diary `logs/world.sqlite3` + `logs/world.jsonl` (`log.Diary`): unique nullable `dedupe_key`, ingest validation (type/source/size/ts, free-text payload keys rejected), causal parents, never raises.
+- Sources (`ingest.py`):
+  - the wheel outbox `logs/outbox/wheel.jsonl`;
+  - the `usage.jsonl` tail -> `bridge.reply` (pulled forward from P-002);
+  - a read-only tail of the old in-wheel `world_events` until the outbox wheel is deployed.
+- One-time backfill (`backfill.py`) from `wheel.sqlite3`, opened read-only.
+- Read-only projection (`state.py`): resources, blame, actors, persona memory (≤ 20), bridge, porada, sources, metrics. The wheel fold stays in `state.py`; there is no separate `folds/` package yet.
+- `budget.py` (pulled forward from P-003): D2 defaults, quiet hours 22–08 Prague (with a built-in DST rule because the Windows venvs have no tzdata), "not while a wheel event is live", and a kill switch (config / `logs/world.kill` / env / kv). `dry_run = true` by default.
+- Wheel at the edge:
+  - `wheel/world_client.py` replaces `WorldLog` in the engine, with the same call sites;
+  - the panel world line and the canvas "Stav světa" section are removed (pulled forward from P-002);
+  - `/api/world` is removed from `:8797`;
+  - `/kolo svet` fetches the snapshot from `oku_world` with a fallback text, instead of the planned static pointer, because `/oku` only arrives in P-002.
+- Config lives under `[world]` in `config.toml` (not a separate `world.toml`) and is re-read on change.
+- Heimdall manifest `services.d/oku_world.toml`: `enabled = true`, `autostart = false`, `cwd` = the worktree for now, `OKU_WORLD_SOURCE_LOGS` = the live `logs`.
+- Not done in P-001: the `/oku` app, the director, persona agents/poster, consequences, and the `POST /api/invite` bonus round (all unchanged in later phases).
+
+### 3.2 Standalone scheduled porada (new; independent of the wheel)
+The world's storylet calendar (`scheduler.py`) starts a **real bot porada** (`meeting.py`) in #oku-porada every weekday at 10:00 Prague (`porada_schedule = "mon-fri 10:00"`). It reuses the file hand-off the bridge already watches (`logs/outbox/meeting_start.jsonl` -> `meeting_ack.jsonl`, `efde370`/`1a9b73d`).
+- The world writes a request with `source = "world"`, no `thread_ts`, a topic generated from world state (or a template), and an opener.
+- The bridge (`Coordinator.start_external`) has the chair Babiš post the opener top-level, runs the porada in its thread, and acks with `thread_ts`.
+- Every step is a diary row: `schedule.due` (once per slot, restart-safe) -> `budget.denied` | `porada.dry_run` | `porada.requested` -> `porada.started` | `porada.failed`.
+- The request respects the budget (it counts as 1 top-level post + 12 LLM calls), the per-channel gap, quiet hours, "no wheel event live" and the kill switch.
+- In `dry_run` (the default) it only writes `porada.dry_run` and **no hand-off line**.
+- A bridge older than this change answers `rejected`, so a premature live request is harmless. A late slot (service down > 30 min) is skipped, never caught up.
 
 Total: about **8.5–11 dev-days**, plus ≥ 3 weeks of wall-clock time for regimes A/B/C (which can start after P-005).
 Dependencies: P-001 → P-002 → P-003 → {P-004, P-005} → P-006 → P-007 → P-008. P-004 and P-005 are independent, so if Kore wants bot-to-bot chatter before real-life triggers, swap them.
@@ -307,7 +335,7 @@ Dependencies: P-001 → P-002 → P-003 → {P-004, P-005} → P-006 → P-007 �
 | D2 | Autonomy budget | ≤ 6 autonomous top-level posts/day total; ≤ 1 per channel per 3 h; ≤ 2 chatter exchanges/day of ≤ 4 turns; ≤ 40 world LLM calls/day; quiet hours 22:00–08:00 Prague; none while a wheel event is live; 2 days of dry-run before going live | stricter (≤ 3/day, persona channels only) · looser |
 | D3 | Real-life data access | Pay-per-use X API, `@AndrejBabis` only, videos only, poll 10 min 08–22, Console spending limit **$5/month**; plus `/oku podnet`; Macinka/Xavera via the platform Kore names | free-only (manual `/oku podnet` + YouTube RSS where it exists) · more X accounts (≈ $0.15–0.5/month each at low volume, UNVERIFIED) |
 | D4 | Satire and consent guardrails for real-life content | Comments react only to the public post itself: link + ≤ 2 sentences; no invented quotes or factual claims about real people; no health, family or criminal topics; posts only in OKÚ channels, never on X; Kore's 🗑 reaction makes the world delete its own post; ICIK is told that metadata (not text) is logged | allow topical riffing beyond the post · no real-life triggers for real politicians (streams only) |
-| D5 | Branch and sequencing | Do P-001 as the next commits on `feat/wheel-of-fortune` (no history rewrite), then push and merge PR #2 with the wheel fixes + the world core carved out; P-002+ on `feat/oku-world` | Rebase now to move `b38a8a8`/`f537b81` onto a new branch and merge only the wheel fixes first (rewrites unpushed commits; needs Kore's OK) |
+| D5 | Branch and sequencing (**superseded 2026-10-09**: P-001 went to `feat/oku-world` in a worktree, because the live services run from the `feat/wheel-of-fortune` working tree; see `docs/WORLD.md` go-live) | Do P-001 as the next commits on `feat/wheel-of-fortune` (no history rewrite), then push and merge PR #2 with the wheel fixes + the world core carved out; P-002+ on `feat/oku-world` | Rebase now to move `b38a8a8`/`f537b81` onto a new branch and merge only the wheel fixes first (rewrites unpushed commits; needs Kore's OK) |
 
 ## 7. Risks
 

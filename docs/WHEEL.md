@@ -9,7 +9,7 @@ Separate from the live persona bridge (`oku_slack.bridge`, Heimdall `oku_slack`)
 flowchart LR
   subgraph Service["oku_slack.wheel.server (one process)"]
     E["engine.Engine (pure, injectable clock + RNG)"]
-    DB[("SQLite logs/wheel.sqlite3: events, cooldowns, sequences, chat, kv, ledger, bets, world_events")]
+    DB[("SQLite logs/wheel.sqlite3: events, cooldowns, sequences, chat, kv, ledger, bets")]
     T["tick loop 0.5 s: alarm / live / expired / done / sequence steps"]
     H["WebSocket hub /ws (broadcast state + server now)"]
     R["render.py: SVG + PNG (Pillow)"]
@@ -33,7 +33,7 @@ flowchart LR
 | `oku_slack/wheel/server.py` | aiohttp app: `/` room, `/ws`, `/api/state`, `/wheel.png`, tick loop |
 | `oku_slack/wheel/slack_adapter.py` | `/kolo` command, code modal, channel notifications |
 | `manifests/kolo.yaml` | manifest for the dedicated Slack app (slash command, interactivity) |
-| `oku_slack/world/` | world layer (P-001): append-only diary `world_events` (`log.py`), read-only projection (`state.py`), Czech surfaces (`view.py`) |
+| `oku_slack/wheel/world_client.py` | wheel -> world outbox adapter (`logs/outbox/wheel.jsonl`); the world itself is the `oku_world` service (`docs/WORLD.md`) |
 
 ## Rules
 - **Spin**: weighted random event; the server picks `target_angle` inside the winning segment, `turns`, `spin_at`. One active event at a time.
@@ -60,7 +60,7 @@ ICIK: `http://<host>:8797/?p=icik&k=icik-local`. Env: `OKU_WHEEL_CONFIG`, `OKU_W
 
 ## Public room
 - Static room: `https://www.itzkore.cz/oku/kolo/` (`scripts/deploy-wheel-room.ps1`, FTP). WebSocket: `wss://kolo-ws.itzkore.cz/ws` through the named Cloudflare tunnel (Heimdall `oku_wheel_tunnel`, `kolo-ws.itzkore.cz` -> 127.0.0.1:8797). Real `room_key`s live in the untracked `players.local.toml`.
-- The tunnel forwards EVERY path on :8797. `/api/state` is public on purpose (room feed, the code is stripped). New routes must be loopback-only: `/api/world` returns 403 unless the peer is local AND no proxy header (`CF-Connecting-IP`, `X-Forwarded-For`, ...) is present (`server.loopback_only`).
+- The tunnel forwards EVERY path on :8797. `/api/state` is public on purpose (room feed, the code is stripped). New routes must be loopback-only (`server.loopback_only`: local peer AND no proxy header such as `CF-Connecting-IP`, `X-Forwarded-For`). World state is not served here any more (`oku_world`, `127.0.0.1:8798`).
 - Music: only the built-in synthesized cue is shipped; any `music_url` must be licensed.
 
 ## Host announcer: Monika Babišová
@@ -157,10 +157,9 @@ The 2-min sequence narrates the effects live in the panel (`Sekvence` field).
 - Event subscriptions (bot events): `reaction_added`, `reaction_removed`. Reinstall the app after the change.
 - Until granted: the hype meter stays at 0 and wheel-bot lines are narrated; everything else works. Granted scopes are read from the `x-oauth-scopes` header of `auth.test` at start and re-checked every 5 min (name override switches on live). Reaction handlers are always registered, so events flow over the existing Socket Mode connection as soon as the app is reinstalled with the subscription; no code change or restart is needed (restart only to log the new scopes immediately).
 
-## OKÚ World layer (P-001: diary + read-only state)
-Plan: `docs/ECOSYSTEM-PLAN.md`. Runs inside the `oku_wheel` process (D2). P-001 adds **no channel posts** and **no consequences**.
-- **Diary** (`oku_slack/world/log.py`): append-only SQLite table `world_events` in `logs/wheel.sqlite3` + JSONL mirror `logs/world.jsonl` (env `OKU_WORLD_JSONL`). Envelope: `id` (`we_0001`), `seq`, `ts`, `type`, `source` (`engine` / `slack` / `room` / `backfill`), `actor`, `subject` (`event:<id>`, `round:<id>`), `payload`, `causal_parents` (default: the first row about the same subject, i.e. the spin), `regime`, `content_version` (git sha), `run_id`. Free text (chat, slash args) is never stored, only types/ids/lengths. A diary failure is logged and never breaks the wheel.
-- Types: `wheel.spin|reveal|confirm|ready|alarm|nag|live|done|expired|vetoed`, `bets.open`, `bet.placed`, `bet.settled`, `bets.refunded`, `effect.double_used`, `command.used`, `show.vote|catch|quiz`, `reaction` (tracked panel/scene messages; emoji name, delta, hype applied), `room.chat` (length only), `ui.kolo` (`/kolo` subcommand name + `slash`/`button`).
-- **Backfill**: on start, if the diary is empty, pre-P-001 history (events, bets, sequences tables) is imported once with `source=backfill` (kv `world:backfilled`).
-- **Projection** (`oku_slack/world/state.py`): pure fold `project(events, ctx)`; incremental cache equals a rebuild from scratch (tested). Resources Dotace 5 000 / Kampaň 35 (0-100) / Hranolky 80 (0-200) / Lajky 1 200 are seeds (`world_<key>` settings override) and only change through `world.delta` rows, which nothing writes until P-002. Read-only interpretation: blame +1 for each player missing an `expired` event and for a `veto`, +1 to the command persona (Kalousek) for a successful `steal_points`; witnessed acts per player per persona (host persona of the event, or the command persona); per-player stats; per-persona event counts; 7-day metrics. `World.snapshot()` also stores kv `world:snapshot`.
-- **Surfaces**: `/kolo svet` (ephemeral), panel overflow "🌍 Stav světa", one panel context line under the leaderboard, canvas section "🌍 Stav světa". Loopback-only `GET /api/world[?events=N]` for local inspection.
+## The wheel as a world event source (P-001 carve-out)
+The world no longer lives in the wheel: it is the separate `oku_world` service (`docs/WORLD.md`). The wheel is one optional event source at its edge and works the same with `oku_world` stopped.
+- **Outbox** (`oku_slack/wheel/world_client.py`): every former diary call (`Engine.record`, same call sites and types) appends one draft line to `logs/outbox/wheel.jsonl` (env `OKU_WORLD_OUTBOX`): `source=wheel`, `payload.via` = `engine` / `slack` / `room`, `subject` namespaced `wheel:event:<id>` / `wheel:round:<id>`, `dedupe_key=wheel:<uuid>`. It never blocks or raises; failures are counted and logged. The wheel no longer writes `world_events`, `logs/world.jsonl` or kv `world:snapshot`.
+- Types: `wheel.spin|reveal|confirm|ready|alarm|nag|live|done|expired|vetoed`, `bets.open`, `bet.placed`, `bet.settled`, `bets.refunded`, `effect.double_used`, `command.used`, `show.vote|catch|quiz`, `reaction` (emoji name, delta, hype applied), `room.chat` (length only), `ui.kolo` (subcommand name + `slash`/`button`). Free text is never written.
+- **Surfaces**: the panel world line and the canvas section "Stav světa" are gone; `/api/world` is gone from `:8797` (now `oku_world` on `127.0.0.1:8798`). `/kolo svet` and the panel overflow "🌍 Stav světa" fetch the snapshot from `oku_world` over loopback (2 s timeout, proxies ignored) and add the player's korun; when `oku_world` is down they answer "Svět OKÚ teď neodpovídá". P-002 moves this to `/oku svet`.
+- The old in-wheel diary rows already in `logs/wheel.sqlite3:world_events` are imported read-only by `oku_world` (one-time backfill, then a read-only tail until this wheel version is deployed).
