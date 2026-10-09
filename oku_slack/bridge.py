@@ -3,7 +3,7 @@ Tokens per persona from env: SLACK_OKU_<KEY>_BOT_TOKEN / SLACK_OKU_<KEY>_APP_TOK
 (babis falls back to SLACK_OKU_BOT_TOKEN / SLACK_OKU_APP_TOKEN). Gemini keys via env or
 OKU_GEMINI_ENV_FILE. Secrets are never logged; only variable names / present-missing."""
 import os, sys, logging, threading
-from . import core, meeting, usage, followup, moderation
+from . import core, meeting, usage, followup, moderation, handoff
 
 FALLBACK = "Technika selhala. To je kampaň!"
 
@@ -136,6 +136,9 @@ def start_all(cfg, env=None, app_factory=None, handler_factory=None):
             core.log.info("persona=%s connected user=%s", key, uid)
         except Exception as e:
             core.log.error("persona=%s failed to start: %s", key, type(e).__name__)
+    if started:  # wheel -> bridge hand-off: oku_wheel asks for a real porada via logs/outbox (local files only)
+        try: coord.inbox = handoff.Inbox(coord.start_external); coord.inbox.run(); core.log.info("meeting inbox: %s", handoff.outbox())
+        except Exception as e: core.log.error("meeting inbox failed: %s", type(e).__name__)
     rep = usage.Reporter(started["babis"].client, cfg) if "babis" in started else None  # Babiš app DMs Kore
     coord.reporter = rep
     for b in started.values(): b.reporter = rep

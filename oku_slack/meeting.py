@@ -99,11 +99,13 @@ ROLE = {
 }
 
 class Meeting:
-    def __init__(self, coord, channel, thread_ts, participants):
+    def __init__(self, coord, channel, thread_ts, participants, source="human", topic=""):
         self.c, self.ch, self.ts = coord, channel, thread_ts
         self.participants = participants
         self.stopped = False
         self.turns = 0
+        self.source, self.topic = source, topic  # source: human (@mention) | wheel (oku_wheel hand-off)
+        self.wake = threading.Event()  # set by a human reply in the thread: next turn comes sooner
 
     def transcript(self):
         b = self.c.bridges["babis"] if "babis" in self.c.bridges else next(iter(self.c.bridges.values()))
@@ -124,7 +126,7 @@ class Meeting:
             text = (text or "").replace(f"<@{u}>", "@" + self.c.cfg["personas"][k]["name"].split()[0])
         return text
 
-    def run(self, turns=None, sleep=time.sleep, rng=random):
+    def run(self, turns=None, sleep=None, rng=random):
         cfg, n = self.c.cfg, turns or rng.randint(8, 12)
         seen_human = set(); last_speaker, rr = None, 0; history = []
         for i in range(n):
@@ -144,13 +146,20 @@ class Meeting:
                                        blame=core.is_blame(cfg, self.humanize(last_text).lower()), history=history)
             if spk not in self.c.bridges: spk = next(p for p in self.participants if p in self.c.bridges)
             extra = []
-            if i == 0: extra.append("Zahajuješ poradu: přivítej, shrň téma z první zprávy a vyvolej jménem prvního řečníka s požadavkem na čísla.")
+            if i == 0 and self.source == "wheel":
+                extra.append("Poradu jsi právě svolal svou první zprávou (událost z kola štěstí OKÚ"
+                             + (f": {self.topic}" if self.topic else "") + "). Neopakuj úvod: rovnou vyvolej jménem prvního řečníka s požadavkem na čísla.")
+            elif i == 0: extra.append("Zahajuješ poradu: přivítej, shrň téma z první zprávy a vyvolej jménem prvního řečníka s požadavkem na čísla.")
             if final: extra.append("UZAVÍRÁŠ poradu: krátké shrnutí, kdo co slíbil, a finální (vymyšlený) zisk/KPI. Tentokrát žádnou otázku.")
             if interjection: extra.append("Člověk (Kore) právě vstoupil do porady – reaguj nejdřív přímo na jeho poslední zprávu.")
             text = self.c.say(spk, self.ch, self.ts, msgs, extra)
             last_speaker = spk; history.append(spk); self.turns += 1
-            if not final: sleep(rng.uniform(8, 15))
+            if not final: (sleep or self.pause)(rng.uniform(8, 15))
         return n
+
+    def pause(self, d, grace=3.0):
+        """Wait d seconds between turns; a human reply (Coordinator.claim sets wake) cuts it to a short grace."""
+        if self.wake.wait(d): self.wake.clear(); time.sleep(min(grace, d))
 
 class Coordinator:
     def __init__(self, cfg, gen=core.generate, max_seen=2000):
@@ -171,9 +180,11 @@ class Coordinator:
         thread = (event.get("channel"), event.get("thread_ts") or event.get("ts"))
         with self.lock:
             if key in self.seen: return "dup" if self.seen[key] else None
-            if thread in self.active:  # mid-meeting human message: meeting loop handles it
-                self.seen[key] = True; self._trim(); return "dup"
+            if thread in self.active:  # mid-meeting human message: meeting loop handles it (re-reads the thread)
+                self.seen[key] = True; self._trim(); self.active[thread].wake.set(); return "dup"
             trig = is_trigger(event.get("text"), self.uid_map)
+            if trig and self.skit_running(*thread):  # P2: a live wheel skit owns this thread -> plain solo reply
+                core.log.info("meeting trigger ignored ch=%s ts=%s: wheel skit running", thread[0], thread[1]); trig = False
             self.seen[key] = trig; self._trim()
             if not trig: return None
             parts = mentioned_personas(event.get("text"), self.uid_map)
@@ -181,6 +192,32 @@ class Coordinator:
             m = self.active[thread] = Meeting(self, thread[0], thread[1], parts)
         core.log.info("meeting start ch=%s ts=%s participants=%s", thread[0], thread[1], ",".join(parts))
         return m
+
+    def skit_running(self, ch, thread_ts):
+        """True while a scripted wheel skit is still posting in this thread (logs/outbox/live_threads.json)."""
+        try:
+            from . import handoff
+            t = handoff.read_live_threads().get(thread_ts)
+            return bool(t and t.get("channel") == ch and t.get("skit_running"))
+        except Exception as e:
+            core.log.warning("live threads unreadable: %s", type(e).__name__); return False
+
+    def busy(self, ch):
+        """A meeting is running anywhere in this channel (which includes the given thread)."""
+        return any(c == ch for c, _ in self.active)
+
+    def start_external(self, req):
+        """Wheel hand-off (oku_slack.handoff): real porada in req's channel/thread. Returns started | dup | rejected.
+        No double porada: refused while any meeting runs in that channel or thread."""
+        ch, ts = req.get("channel"), req.get("thread_ts")
+        if not (ch and ts and self.bridges): return "rejected"
+        with self.lock:
+            if self.busy(ch):
+                core.log.info("wheel meeting refused ch=%s ts=%s: meeting already running", ch, ts); return "dup"
+            parts = [k for k in self.uid_map if k != "kalousek"] or list(self.uid_map)
+            m = self.active[(ch, ts)] = Meeting(self, ch, ts, parts, source="wheel", topic=req.get("topic") or "")
+        core.log.info("meeting start (wheel %s) ch=%s ts=%s participants=%s", req.get("event_id"), ch, ts, ",".join(parts))
+        self.start(m); return "started"
 
     def _trim(self):
         while len(self.seen) > self.max_seen: self.seen.popitem(last=False)
