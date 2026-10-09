@@ -18,7 +18,12 @@ def _wheel_tests_allow_force(monkeypatch):
 
 @_pytest.fixture(autouse=True)
 def _no_real_logs(monkeypatch, tmp_path):
-    """Tests never write the real logs/usage.jsonl (usage.usage_log_path honours OKU_USAGE_LOG) nor the real
-    wheel->bridge hand-off files under logs/outbox (oku_slack.handoff honours OKU_MEETING_OUTBOX)."""
+    """Tests never write the real logs/usage.jsonl (usage.usage_log_path honours OKU_USAGE_LOG), the real
+    wheel->bridge hand-off files under logs/outbox (oku_slack.handoff honours OKU_MEETING_OUTBOX) nor the world diary."""
     monkeypatch.setenv("OKU_USAGE_LOG", str(tmp_path / "usage.jsonl"))
     monkeypatch.setenv("OKU_MEETING_OUTBOX", str(tmp_path / "outbox"))
+    # oku_world: never the real diary/source logs, never a running world service on :8798
+    monkeypatch.setenv("OKU_WORLD_LOGS", str(tmp_path / "world-logs"))
+    monkeypatch.setenv("OKU_WORLD_SOURCE_LOGS", str(tmp_path / "world-src"))
+    monkeypatch.setenv("OKU_WORLD_URL", "http://127.0.0.1:9")
+    monkeypatch.delenv("OKU_WORLD_DRY_RUN", raising=False); monkeypatch.delenv("OKU_WORLD_KILL", raising=False)

@@ -82,3 +82,30 @@ hard_stop_min = 45
 enabled = true
 allowed_channels = ["C0C76PTMJ9Z"]  # čapák
 owner_user_id = "U0C6XAN3EG3"       # Kore
+
+# OKÚ world core (service oku_world, python -m oku_slack.world.service, loopback 127.0.0.1:8798; docs/WORLD.md).
+# Re-read on change (no restart). dry_run = true: the world only writes diary rows about what it WOULD do; nothing is
+# handed to the bridge and nothing is posted. Env OKU_WORLD_DRY_RUN=0/1 overrides. Kill switch: kill_switch = true,
+# or create logs/world.kill (diary logs dir), or env OKU_WORLD_KILL=1.
+[world]
+dry_run = true
+kill_switch = false
+regime = "A_scarce"
+timezone = "Europe/Prague"
+quiet_hours = ["22:00", "08:00"]
+# Standalone scheduled porada (independent of the wheel): a REAL bot porada (meeting.py) via the bridge file hand-off.
+porada_enabled = true
+porada_schedule = "mon-fri 10:00"
+porada_channel = "C0C6W8E6NP9"   # #oku-porada
+porada_grace_min = 30            # a slot later than this (service was down) is skipped, never caught up
+porada_llm_estimate = 12         # LLM calls charged to the world budget per porada (meeting = 8-12 turns)
+porada_ack_timeout_s = 120
+# Budget (decision D2): autonomous actions only; human-triggered replies/poradas never count.
+posts_per_day = 6                # top-level posts per day, all world sources together
+per_channel_gap_h = 3            # at most 1 top-level post per channel per 3 h
+chatter_threads_per_day = 2      # autonomous persona-to-persona threads (P-005)
+chatter_max_turns = 4
+llm_calls_per_day = 40
+no_posts_while_wheel_live = true
+tick_s = 15
+legacy_wheel_tail = true         # also read the old in-wheel diary (wheel.sqlite3:world_events, read-only) until the outbox wheel is deployed
