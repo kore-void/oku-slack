@@ -78,7 +78,8 @@ Triggers: spin (or `legendary`), `reveal` after the spin animation (`spin_ms`), 
 
 ## Heimdall
 `C:\code\heimdall\services.d\oku_wheel.toml` (`autostart = true`, health `GET /api/state`), plus `oku_wheel_tunnel.toml` (named tunnel `kolo-ws.itzkore.cz` -> :8797, autostart).
-Apply code/config changes with `heimdall restart oku_wheel`. Redeploy the static room (`scripts/deploy-wheel-room.ps1`) only when `room.html` or the images change.
+Apply code/config changes with `heimdall restart oku_wheel`. Logs: timestamped, `logs\oku_wheel.log` (rotating 5 MB x 5); the running commit is logged at start and served as `commit` in `GET /api/state`.
+Porada hand-off needs BOTH services on the same checkout: restart `oku_slack` (bridge, starts the meeting inbox) first, then `oku_wheel`. Redeploy the static room (`scripts/deploy-wheel-room.ps1`) only when `room.html` or the images change.
 
 ## Slack canvas + spin GIF
 - `canvas.py`: channel canvas "OKÚ Kolo · živě" in `slack_channel` (conversations.canvases.create; if the channel already has one, a standalone canvas shared read-only to the channel). Id stored in SQLite `kv.canvas_id`, reused after restart.
@@ -141,7 +142,10 @@ The 2-min sequence narrates the effects live in the panel (`Sekvence` field).
 - ICIK "Kalousek za to může": `steal_points` (`steal_pct` % of the leader's balance; the richest other player if ICIK leads; blocked by `shield`), Kalousek posts a one-liner.
 
 ### Persona scenes
-- On `live`, `SceneRunner` posts the scene: the first beat is a short top-level line in the wheel channel, the rest go into its thread.
+- On `live`, `SceneRunner` posts the scene: the first beat is a short top-level line in the wheel channel, the rest go into its thread, `scene_gap_s` (~20 s) apart.
+- **Porada = real bot meeting** (`scenes.toml` `meeting = true`, `meeting_handoff = true`): only Babiš's opener is posted; it becomes the thread root and the wheel appends a request to `logs/outbox/meeting_start.jsonl` (`oku_slack/handoff.py`, env `OKU_MEETING_OUTBOX`). The persona bridge (service `oku_slack`) polls it every 1 s, starts `meeting.Meeting` in that thread (Babiš continues without repeating the opener) and acks in `meeting_ack.jsonl` (`started` / `dup` = a meeting already runs in that channel / `stale` = request older than 90 s / `error`). On `started` the scripted beats are dropped; on any other answer, or no answer within `meeting_handoff_timeout_s` (30 s), the scripted beats play as before (fallback). Local files only: no port, nothing reachable through the tunnel, no Slack bot message is trusted.
+- `logs/outbox/live_threads.json`: the wheel's live scene threads (host persona, until = event end, `skit_running`). The bridge uses it for plain human replies (below) and to refuse a meeting trigger in a thread whose scripted skit is still running (P2).
+- Plain human replies (no @mention) in a thread: live meeting thread -> the meeting answers next turn (pause cut to ~3 s); live wheel thread -> the event host persona answers solo. Delivered via `message.channels`, which only the Babiš app subscribes to (manifests/babis.yaml). Bot messages never route (loop guard unchanged).
 - Each line: persona prompt via `oku_slack.core.build_prompt` (same persona files as the bridge) + `core.generate` (Gemini; env `LLM_BACKEND`, `OKU_GEMINI_ENV_FILE` like the bridge's Heimdall service).
   Transcript so far + any running charged sequence go into the prompt. Error, empty answer, or more than `scene_llm_timeout_s` -> the beat's templated `fallback`.
 - Titanic legend: fixed script lines; `turek` -> Bourák bot, `marty` -> Marty bot, `macinka` -> Peťa bot (`SLACK_OKU_PETA_BOT_TOKEN`; config.toml alias), `monika` -> wheel bot. Without a persona token the wheel bot posts the line (`username` override if `chat:write.customize` is granted, else narrated by Monika).
