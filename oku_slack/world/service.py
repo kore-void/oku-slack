@@ -4,8 +4,9 @@
   carry none of the proxy/tunnel headers (CF-*, X-Forwarded-*, Forwarded, X-Real-IP, ...) -> otherwise 403;
 - routes: GET /healthz, GET /api/world[?events=N&player=p], GET /api/budget, POST /api/events (diary drafts from
   local sources; validated and deduped like every other source);
-- loop (tick_s): ingest wheel outbox + usage.jsonl + legacy wheel diary, then the scheduler (porada);
-- dry_run = true by default: nothing is handed to the bridge, the scheduler writes `porada.dry_run` rows instead.
+- loop (tick_s): ingest wheel outbox + usage.jsonl + legacy wheel diary, then the scheduler (porada), then the
+  chatter director (P-005, oku_slack/world/chatter.py);
+- dry_run = true by default: nothing is handed to the bridge; `porada.dry_run` / `chatter.dry_run` rows instead.
 
 Paths: diary/logs dir = env OKU_WORLD_LOGS, else <checkout>/logs (world.sqlite3, world.jsonl, oku_world.log,
 world.kill). Source logs (usage.jsonl, outbox/wheel.jsonl, outbox/meeting_*.jsonl, wheel.sqlite3) = env
@@ -13,7 +14,7 @@ OKU_WORLD_SOURCE_LOGS, else the diary logs dir. Config: [world] in config.toml (
 OKU_WORLD_DRY_RUN=0/1 overrides dry_run. The config is re-read when the file changes (no restart needed)."""
 import json, logging, logging.handlers, os, pathlib, threading, time, tomllib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from . import backfill as backfill_mod, budget, ingest, log as wlog, scheduler, state, tz
+from . import backfill as backfill_mod, budget, chatter, ingest, log as wlog, scheduler, state, tz
 
 log = logging.getLogger("oku_world")
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -21,7 +22,7 @@ PROXY_HEADERS = ("CF-Connecting-IP", "CF-Ray", "CF-IPCountry", "Cf-Warp-Tag-Id",
                  "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Port", "X-Forwarded-Server",
                  "X-Real-IP", "X-Original-Forwarded-For", "Forwarded", "Via", "True-Client-IP", "X-Client-IP")
 ALLOWED_PEERS = {"127.0.0.1"}
-DEFAULTS = dict(budget.DEFAULTS, **scheduler.PORADA_DEFAULTS, regime="A_scarce", run_id="oku-world-1", port=8798,
+DEFAULTS = dict(budget.DEFAULTS, **scheduler.PORADA_DEFAULTS, **chatter.CHATTER_DEFAULTS, regime="A_scarce", run_id="oku-world-1", port=8798,
                 tick_s=15, legacy_wheel_tail=True, usage_tail=True, wheel_outbox=True)
 NAMES = {"babis": "Babiš", "alenka": "Alenka", "bourak": "Bourák", "marty": "Marty", "peta": "Peťa", "kalousek": "Kalousek",
          "monika": "Monika", "kore": "Kore", "icik": "ICIK"}
@@ -86,6 +87,7 @@ class WorldService:
                         "usage": ingest.UsageTail(self.diary, self.source_logs / "usage.jsonl"),
                         "wheel_legacy": ingest.LegacyWheelDb(self.diary, self.wheel_db)}
         self.scheduler = scheduler.PoradaScheduler(self)
+        self.chatter = chatter.ChatterDirector(self)
         self.started_at, self.last_tick, self.tick_errors, self.lock = clock(), None, 0, threading.RLock()
         self.last_ingest = {}
 
@@ -101,7 +103,8 @@ class WorldService:
         n = backfill_mod.backfill(self.diary, self.wheel_db, players=list((self.ctx.get("players") or {}).keys()))
         c = self.settings()
         self.diary.record("world.started", None, None, {"dry_run": c["dry_run"], "version": self.diary.version, "backfilled": n,
-                          "porada_schedule": c["porada_schedule"]}, source="world")
+                          "porada_schedule": c["porada_schedule"],
+                          "chatter_schedule": c["chatter_schedule"] if c.get("chatter_enabled", True) else None}, source="world")
         log.info("oku_world ready: dry_run=%s diary=%s source_logs=%s backfill=%s", c["dry_run"], self.logs_dir, self.source_logs, n)
         return n
 
@@ -117,6 +120,8 @@ class WorldService:
                 except Exception as e: self.tick_errors += 1; log.warning("source %s failed: %s", name, type(e).__name__)
             try: res["scheduler"] = [r["type"] for r in self.scheduler.tick(now) if r]
             except Exception as e: self.tick_errors += 1; log.warning("scheduler failed: %s", type(e).__name__)
+            try: res["chatter"] = [r["type"] for r in self.chatter.tick(now) if r]
+            except Exception as e: self.tick_errors += 1; log.warning("chatter director failed: %s", type(e).__name__)
             self.last_tick, self.last_ingest = now, res
         return res
 
@@ -129,7 +134,11 @@ class WorldService:
         return {"dry_run": c["dry_run"], "kill": kill, "quiet": budget.is_quiet(now, c["quiet_hours"], c.get("timezone", tz.PRAGUE)),
                 "limits": {k: c[k] for k in ("posts_per_day", "per_channel_gap_h", "chatter_threads_per_day", "chatter_max_turns", "llm_calls_per_day", "quiet_hours")},
                 "usage": dec["usage"], "porada_now": {"ok": dec["ok"], "reasons": dec["reasons"]},
-                "porada_schedule": c["porada_schedule"], "porada_channel": c["porada_channel"]}
+                "porada_schedule": c["porada_schedule"], "porada_channel": c["porada_channel"],
+                "chatter_now": {k: v for k, v in budget.check("chatter", rows, now, c, wheel_live=state.wheel_live(self.world.state(), now),
+                                                              kill=kill).items() if k in ("ok", "reasons")},
+                "chatter_schedule": c["chatter_schedule"] if c.get("chatter_enabled", True) else None,
+                "chatter_pending": bool(self.diary.kv_get("chatter:pending"))}
 
     def health(self):
         c = self.settings()

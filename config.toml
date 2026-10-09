@@ -104,8 +104,23 @@ porada_ack_timeout_s = 120
 posts_per_day = 6                # top-level posts per day, all world sources together
 per_channel_gap_h = 3            # at most 1 top-level post per channel per 3 h
 chatter_threads_per_day = 2      # autonomous persona-to-persona threads (P-005)
-chatter_max_turns = 4
+chatter_max_turns = 4            # opener + replies in one thread; the bridge also hard-caps at 4
 llm_calls_per_day = 40
 no_posts_while_wheel_live = true
 tick_s = 15
+# Autonomous persona chatter (P-005, docs/WORLD.md): the director picks a storylet, 2-3 personas and a persona channel
+# per slot; dry_run writes chatter.dry_run only; live hands a kind=chatter line to the bridge, which runs <= 4 turns.
+chatter_enabled = true
+chatter_schedule = "mon-fri 11:30,16:30"
+chatter_grace_min = 30
+chatter_ack_timeout_s = 120      # no 'started' ack by then -> chatter.failed no_ack
+chatter_done_timeout_s = 900     # started but no 'done' ack by then -> chatter.ended timeout
 legacy_wheel_tail = true         # also read the old in-wheel diary (wheel.sqlite3:world_events, read-only) until the outbox wheel is deployed
+
+# Persona channels the chatter may use (world picks; the bridge only accepts these when the table is present).
+[world.chatter_channels]
+kantyna = "C0C7BF296P4"   # #oku-kantyna
+dotace = "C0C75CZ2UCT"    # #oku-dotace-desk
+socky = "C0C76ATANTX"     # #oku-socky
+disko = "C0C75CZPRUK"     # #oku-disko
+vina = "C0C76ATGLAH"      # #oku-vina

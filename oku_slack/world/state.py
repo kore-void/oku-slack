@@ -46,6 +46,8 @@ def initial(ctx=None):
             "memory": {},    # persona -> [{"we", "type", "ts", "about", "note"}] newest last
             "bridge": {"calls": 0, "by_persona": {}, "by_kind": {}, "last_ts": None},
             "porada": {"due": 0, "dry_run": 0, "requested": 0, "started": 0, "failed": 0, "denied": 0, "last": None},
+            "chatter": {"due": 0, "dry_run": 0, "requested": 0, "started": 0, "ended": 0, "failed": 0, "denied": 0, "skipped": 0,
+                        "by_storylet": {}, "last": None},
             "sources": {},   # source -> {"events", "last_ts"}
             "totals": {"spun": 0, "live": 0, "done": 0, "expired": 0, "vetoed": 0, "bets": 0, "commands": 0, "reactions": 0, "human_actions": 0},
             "events": {},    # wheel event id -> {"key", "state", "ts"}
@@ -150,6 +152,14 @@ def apply(st, ev, ctx=None):
         b = st["bridge"]; b["calls"] += 1; b["last_ts"] = ts
         if a: b["by_persona"][a] = b["by_persona"].get(a, 0) + 1
         k = pl.get("kind") or "?"; b["by_kind"][k] = b["by_kind"].get(k, 0) + 1
+    elif t.startswith("chatter.") or t in ("schedule.due", "schedule.skipped", "budget.denied") and pl.get("storylet") == "CHATTER":
+        c = st["chatter"]; kind = {"schedule.due": "due", "schedule.skipped": "skipped", "budget.denied": "denied"}.get(t) or t.split(".", 1)[1]
+        if kind in c: c[kind] += 1
+        sk = pl.get("pick") or pl.get("storylet")
+        if t in ("chatter.dry_run", "chatter.requested") and sk: c["by_storylet"][sk] = c["by_storylet"].get(sk, 0) + 1
+        if t != "schedule.due":
+            c["last"] = {"we": we, "type": t, "ts": ts, "storylet": sk, "channel": pl.get("channel"), "personas": pl.get("participants"),
+                         "topic": pl.get("topic"), "status": pl.get("status") or ",".join(pl.get("reasons") or []) or None}
     elif t.startswith("porada.") or t == "schedule.due" and pl.get("storylet") == "PORADA":
         p = st["porada"]; kind = "due" if t == "schedule.due" else t.split(".", 1)[1]
         if kind in p: p[kind] += 1
@@ -185,6 +195,7 @@ def metrics(events, since_ts):
         elif t == "reaction": m["reactions"] += 1
         elif t == "bridge.reply": m["bridge_calls"] += 1
         elif t == "porada.started": m["porady"] += 1
+        elif t == "chatter.started": m["chatter"] = m.get("chatter", 0) + 1
         elif t.endswith(".dry_run"): m["dry_runs"] += 1
         elif t == "budget.denied": m["budget_denied"] += 1
         if ev.get("actor") and (pl.get("via") or ev.get("source")) in HUMAN_VIA and ev.get("actor") not in PERSONAS: m["human_actions"] += 1
@@ -226,6 +237,7 @@ class World:
                 "blame": dict(sorted(st["blame"].items(), key=lambda kv: (-kv[1], kv[0]))),
                 f"metrics_{days}d": metrics(self.log.events(since_ts=now - days * 86400), now - days * 86400),
                 "totals": dict(st["totals"]), "bridge": copy.deepcopy(st["bridge"]), "porada": copy.deepcopy(st["porada"]),
+                "chatter": copy.deepcopy(st["chatter"]),
                 "sources": copy.deepcopy(st["sources"]), "actors": copy.deepcopy(st["actors"]),
                 "memory": {k: v[-5:] for k, v in st["memory"].items()},
                 "personas": copy.deepcopy(st["personas"]), "recent": list(st["recent"]),
