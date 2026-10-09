@@ -42,6 +42,7 @@ def test_derive_effects_and_selectors():
     assert consequences.derive(ev(7, "chatter.dry_run", storylet="X", participants=["a"]), dict(c, include_dry_run=False)) == []
     pod = consequences.derive(ev(8, "podnet.dry_run", kind="x_video", participants=["marty"]), c)
     assert {o["payload"]["rule"] for o in pod} == {"podnet_reacted_lajky", "podnet_reacted_kampan"}
+    assert consequences.derive(ev(9, "podnet.dry_run", kind="x_video", participants=["marty"], test=True), c) == []   # test podnet: no effect
 
 def test_engine_writes_rows_once_and_projection_replays(tmp_path):
     svc, clk = mk(tmp_path, {"porada_enabled": True, "chatter_enabled": False}); clk.t = P(2026, 10, 12, 10, 1)

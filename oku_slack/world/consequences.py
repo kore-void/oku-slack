@@ -65,6 +65,7 @@ def matches(rule, ev, include_dry_run=True):
     if t not in rule["on"] or t.startswith("consequence."): return False
     if t.endswith(".dry_run") and not include_dry_run: return False
     pl = ev.get("payload") or {}
+    if pl.get("test") is True: return False      # test rows (e.g. a test podnet) never change the world
     return all(pl.get(k) in allowed for k, allowed in rule["where"].items())
 
 def effects(rule, ev, ctx=None):
