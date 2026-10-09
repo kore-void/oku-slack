@@ -97,6 +97,16 @@ def dispatch(b, event):
         if r == "dup": return "dup"
     threading.Thread(target=b.handle, args=(event,), daemon=True).start(); return "solo"
 
+def route_plain(b, event):
+    """Plain human thread reply (no @mention; arrives only via message.channels, i.e. the Babiš app): live meeting
+    thread -> the meeting answers; live wheel-skit thread -> the event's host persona answers solo. Else None."""
+    c = getattr(b, "coord", None)
+    if c is None or ignored(event, b.bot): return None
+    r = c.route_plain(event)
+    if r is None or r == "meeting": return r
+    core.log.info("plain reply ch=%s ts=%s -> %s (live wheel thread)", event.get("channel"), event.get("ts"), r)
+    threading.Thread(target=c.bridges[r].handle, args=(event,), daemon=True).start(); return r
+
 def register(app, b):
     spawn = lambda ev: dispatch(b, ev)
     @app.event("app_mention")
@@ -112,7 +122,9 @@ def register(app, b):
         # "Andreji, vyhoď X" without @mention (mentions go via app_mention); owner only, others silently ignored
         if b.persona == "babis" and not ignored(event, b.bot) and f"<@{b.bot}>" not in (event.get("text") or ""):
             s = moderation.settings(b.cfg)
-            if s and event.get("user") == s["owner"]: b.moderate(event)
+            if s and event.get("user") == s["owner"] and b.moderate(event): return
+        try: route_plain(b, event)
+        except Exception as e: core.log.warning("plain reply routing failed: %s", type(e).__name__)
 
 def start_all(cfg, env=None, app_factory=None, handler_factory=None):
     """Start one Socket Mode app per persona with tokens. Returns {key: bridge}."""

@@ -202,6 +202,30 @@ class Coordinator:
         except Exception as e:
             core.log.warning("live threads unreadable: %s", type(e).__name__); return False
 
+    def route_plain(self, event):
+        """P0-b: a plain human reply (no persona @mention) in a channel THREAD. Returns 'meeting' when a meeting runs
+        in that thread (its loop answers; next turn woken), a persona key when it is a live wheel-skit thread (that
+        persona answers solo; the event host), else None (unchanged: ignored). Bots never route (loop guard)."""
+        if event.get("bot_id") or event.get("subtype") or event.get("user") in self.uid_to_persona: return None
+        th, ch = event.get("thread_ts"), event.get("channel")
+        if event.get("channel_type") == "im" or not th or th == event.get("ts") or not ch: return None
+        if mentioned_personas(event.get("text"), self.uid_map): return None  # app_mention path owns it
+        key, thread = (ch, event.get("ts")), (ch, th)
+        with self.lock:
+            if key in self.seen: return None
+            if thread in self.active:
+                self.seen[key] = True; self._trim(); self.active[thread].wake.set(); return "meeting"
+        try:
+            from . import handoff
+            live = handoff.read_live_threads().get(th)
+        except Exception as e: core.log.warning("live threads unreadable: %s", type(e).__name__); live = None
+        if not live or live.get("channel") != ch or not self.bridges: return None
+        with self.lock:
+            if key in self.seen: return None
+            self.seen[key] = True; self._trim()
+        host = live.get("host")
+        return host if host in self.bridges else ("babis" if "babis" in self.bridges else next(iter(self.bridges)))
+
     def busy(self, ch):
         """A meeting is running anywhere in this channel (which includes the given thread)."""
         return any(c == ch for c, _ in self.active)
