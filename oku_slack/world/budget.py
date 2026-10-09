@@ -3,8 +3,8 @@ hours (Europe/Prague), "never while a wheel event is live", kill switch and dry 
 the budget is a PROJECTION of what the world already did (no separate counter that could drift).
 
 What counts:
-- top-level post: `agent.posted` (payload.top_level != false), `porada.requested` and `chatter.requested` (the bridge
-  posts the opener top-level);
+- top-level post: `agent.posted` (payload.top_level != false), `porada.requested`, `chatter.requested` and
+  `podnet.requested` (the bridge posts the opener / the podnet repost top-level);
 - chatter exchange: `chatter.requested` / `chatter.started`, counted once per subject (`chatter:<slot>`), so the
   request and its later ack never count twice; turns of one exchange are capped by chatter_max_turns;
 - LLM calls charged to the world: sum of payload.llm_calls on rows from world-owned sources (agent, director,
@@ -18,7 +18,7 @@ DEFAULTS = {
     "posts_per_day": 6, "per_channel_gap_h": 3.0, "chatter_threads_per_day": 2, "chatter_max_turns": 4,
     "llm_calls_per_day": 40, "no_posts_while_wheel_live": True,
 }
-POST_TYPES = ("agent.posted", "porada.requested", "chatter.requested")
+POST_TYPES = ("agent.posted", "porada.requested", "chatter.requested", "podnet.requested")
 CHATTER_TYPES = ("chatter.requested", "chatter.started")
 WORLD_SOURCES = ("agent", "director", "schedule", "chatter", "world")
 

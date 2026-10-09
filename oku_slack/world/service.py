@@ -4,8 +4,9 @@
   carry none of the proxy/tunnel headers (CF-*, X-Forwarded-*, Forwarded, X-Real-IP, ...) -> otherwise 403;
 - routes: GET /healthz, GET /api/world[?events=N&player=p], GET /api/budget, POST /api/events (diary drafts from
   local sources; validated and deduped like every other source);
-- loop (tick_s): ingest wheel outbox + usage.jsonl + legacy wheel diary, then the scheduler (porada), then the
-  chatter director (P-005, oku_slack/world/chatter.py);
+- loop (tick_s): podnet pollers (X API only with X_BEARER_TOKEN; pplx when enabled), then ingest wheel outbox +
+  usage.jsonl + legacy wheel diary + podnet inbox (logs/inbox/podnety.jsonl), then the podnet reactor (P-004), the
+  scheduler (porada) and the chatter director (P-005);
 - dry_run = true by default: nothing is handed to the bridge; `porada.dry_run` / `chatter.dry_run` rows instead.
 
 Paths: diary/logs dir = env OKU_WORLD_LOGS, else <checkout>/logs (world.sqlite3, world.jsonl, oku_world.log,
@@ -14,7 +15,7 @@ OKU_WORLD_SOURCE_LOGS, else the diary logs dir. Config: [world] in config.toml (
 OKU_WORLD_DRY_RUN=0/1 overrides dry_run. The config is re-read when the file changes (no restart needed)."""
 import json, logging, logging.handlers, os, pathlib, threading, time, tomllib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from . import backfill as backfill_mod, budget, chatter, ingest, log as wlog, scheduler, state, tz
+from . import backfill as backfill_mod, budget, chatter, ingest, log as wlog, podnet, pplx, react, scheduler, state, tz, xsource
 
 log = logging.getLogger("oku_world")
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -22,8 +23,10 @@ PROXY_HEADERS = ("CF-Connecting-IP", "CF-Ray", "CF-IPCountry", "Cf-Warp-Tag-Id",
                  "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Port", "X-Forwarded-Server",
                  "X-Real-IP", "X-Original-Forwarded-For", "Forwarded", "Via", "True-Client-IP", "X-Client-IP")
 ALLOWED_PEERS = {"127.0.0.1"}
-DEFAULTS = dict(budget.DEFAULTS, **scheduler.PORADA_DEFAULTS, **chatter.CHATTER_DEFAULTS, regime="A_scarce", run_id="oku-world-1", port=8798,
-                tick_s=15, legacy_wheel_tail=True, usage_tail=True, wheel_outbox=True)
+DEFAULTS = dict(budget.DEFAULTS, **scheduler.PORADA_DEFAULTS, **chatter.CHATTER_DEFAULTS, **react.DEFAULTS, regime="A_scarce",
+                run_id="oku-world-1", port=8798, tick_s=15, legacy_wheel_tail=True, usage_tail=True, wheel_outbox=True,
+                podnet_inbox=True)
+RESERVED_SOURCES = ("wheel", "backfill", "bridge", "podnet")   # each has its own tail/engine
 NAMES = {"babis": "Babiš", "alenka": "Alenka", "bourak": "Bourák", "marty": "Marty", "peta": "Peťa", "kalousek": "Kalousek",
          "monika": "Monika", "kore": "Kore", "icik": "ICIK"}
 
@@ -80,12 +83,16 @@ class WorldService:
         self.diary = wlog.Diary(self.logs_dir / "world.sqlite3", jsonl=self.logs_dir / "world.jsonl", clock=clock,
                                 regime=c["regime"], run_id=c["run_id"])
         self.ctx = wheel_ctx() if ctx is None else ctx
+        self.inbox_path = podnet.inbox_path(self.logs_dir)
         self.names = dict(NAMES, **{k: v.get("name", k) for k, v in (self.ctx.get("players") or {}).items()})
         self.titles = dict(self.ctx.get("titles") or {})
         self.world = state.World(self.diary, self.ctx, clock)
         self.sources = {"wheel": ingest.WheelOutbox(self.diary, self.outbox_dir / "wheel.jsonl"),
                         "usage": ingest.UsageTail(self.diary, self.source_logs / "usage.jsonl"),
-                        "wheel_legacy": ingest.LegacyWheelDb(self.diary, self.wheel_db)}
+                        "wheel_legacy": ingest.LegacyWheelDb(self.diary, self.wheel_db),
+                        "podnet_inbox": podnet.InboxSource(self.diary, self.inbox_path, clock)}
+        self.pollers = {"x": xsource.XSource(self), "pplx": pplx.PplxSource(self)}
+        self.reactor = react.Reactor(self)
         self.scheduler = scheduler.PoradaScheduler(self)
         self.chatter = chatter.ChatterDirector(self)
         self.started_at, self.last_tick, self.tick_errors, self.lock = clock(), None, 0, threading.RLock()
@@ -112,12 +119,18 @@ class WorldService:
         now = self.clock() if now is None else now
         c = self.settings(); res = {}
         with self.lock:
+            for name, pol in self.pollers.items():   # pollers only append to the podnet inbox (never post anywhere)
+                try: res[name] = pol.poll(now)
+                except Exception as e: self.tick_errors += 1; log.warning("poller %s failed: %s", name, type(e).__name__)
             for name, src in self.sources.items():
                 if name == "wheel_legacy" and not c.get("legacy_wheel_tail", True): continue
                 if name == "usage" and not c.get("usage_tail", True): continue
                 if name == "wheel" and not c.get("wheel_outbox", True): continue
+                if name == "podnet_inbox" and not c.get("podnet_inbox", True): continue
                 try: res[name] = src.poll(now)
                 except Exception as e: self.tick_errors += 1; log.warning("source %s failed: %s", name, type(e).__name__)
+            try: res["podnet"] = [r["type"] for r in self.reactor.tick(now) if r]
+            except Exception as e: self.tick_errors += 1; log.warning("podnet reactor failed: %s", type(e).__name__)
             try: res["scheduler"] = [r["type"] for r in self.scheduler.tick(now) if r]
             except Exception as e: self.tick_errors += 1; log.warning("scheduler failed: %s", type(e).__name__)
             try: res["chatter"] = [r["type"] for r in self.chatter.tick(now) if r]
@@ -143,7 +156,9 @@ class WorldService:
     def health(self):
         c = self.settings()
         return {"ok": True, "service": "oku_world", "version": self.diary.version, "dry_run": c["dry_run"], "events": self.diary.count(),
-                "last_tick": self.last_tick, "tick_errors": self.tick_errors, "ingest": self.diary.stats, "uptime_s": round(self.clock() - self.started_at)}
+                "last_tick": self.last_tick, "tick_errors": self.tick_errors, "ingest": self.diary.stats, "uptime_s": round(self.clock() - self.started_at),
+                "podnet": {"inbox": str(self.inbox_path), "x": self.pollers["x"].state, "pplx": self.pollers["pplx"].state,
+                           "pplx_last": self.pollers["pplx"].last}}
 
     def api_world(self, query):
         snap = self.world.snapshot()
@@ -160,7 +175,7 @@ class WorldService:
         drafts = body if isinstance(body, list) else [body]
         out = []
         for d in drafts[:100]:
-            if isinstance(d, dict) and d.get("source") in ("wheel", "backfill", "bridge"):
+            if isinstance(d, dict) and d.get("source") in RESERVED_SOURCES:
                 out.append({"status": "invalid", "reason": "source_reserved"}); continue  # those have their own tails
             st, row = self.diary.ingest(d)
             out.append({"status": st, "id": row["id"]} if st == "ok" else {"status": st, "reason": row} if st == "invalid" else {"status": st})

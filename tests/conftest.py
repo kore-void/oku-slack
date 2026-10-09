@@ -27,3 +27,13 @@ def _no_real_logs(monkeypatch, tmp_path):
     monkeypatch.setenv("OKU_WORLD_SOURCE_LOGS", str(tmp_path / "world-src"))
     monkeypatch.setenv("OKU_WORLD_URL", "http://127.0.0.1:9")
     monkeypatch.delenv("OKU_WORLD_DRY_RUN", raising=False); monkeypatch.delenv("OKU_WORLD_KILL", raising=False)
+    monkeypatch.delenv("OKU_WORLD_INBOX", raising=False); monkeypatch.delenv("OKU_WORLD_CONSEQUENCES", raising=False)
+    # podnet pollers: never a real X token (env or Windows registry) and never the real pplx CLI
+    from oku_slack.world import pplx as _pplx, xsource as _x, view as _view
+    monkeypatch.delenv("X_BEARER_TOKEN", raising=False)
+    monkeypatch.setattr(_x, "bearer_token", lambda env=None: (env or {}).get("X_BEARER_TOKEN"))
+    def _no_cli(*a, **k): raise AssertionError("tests must not run the real pplx CLI")
+    monkeypatch.setattr(_pplx, "run_cli", _no_cli)
+    def _no_http(*a, **k): raise AssertionError("tests must not call the real X API")
+    monkeypatch.setattr(_x, "http_get", _no_http)
+    getattr(_view, "_BRIEFS", {}).clear()

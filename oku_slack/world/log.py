@@ -23,7 +23,7 @@ create table if not exists kv(k text primary key, v text);
 COLS = ("seq", "id", "ts", "type", "source", "actor", "subject", "dedupe_key", "payload", "causal_parents", "regime",
         "content_version", "run_id")
 SOURCES = frozenset({"wheel", "bridge", "schedule", "backfill", "director", "agent", "consequence", "budget", "world",
-                     "x", "stream", "slack", "manual", "chatter"})
+                     "x", "stream", "slack", "manual", "chatter", "podnet"})
 TYPE_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z0-9_]+){0,3}$")
 TEXT_KEYS = frozenset({"text", "message", "body", "content", "prompt", "reply", "chat", "transcript"})
 MAX_PAYLOAD = 4096

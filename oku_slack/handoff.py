@@ -49,21 +49,39 @@ def request_meeting(channel, thread_ts, event_id=None, topic="", host="babis", c
                               "event_id": event_id, "topic": (topic or "")[:500], "host": host})
 
 # ---------- world side (oku_world scheduler: standalone porada, no thread yet) ----------
-def request_world_meeting(channel, topic, opener, storylet="PORADA", slot=None, outbox_dir=None, clock=time.time):
-    """Ask the bridge to post `opener` as Babiš (top-level in channel) and run a real porada in its thread.
-    Old bridges (before this field existed) answer 'rejected' because thread_ts is missing: safe by design."""
-    return _append(REQUESTS, {"id": uuid.uuid4().hex[:12], "at": clock(), "channel": channel, "thread_ts": None,
-                              "event_id": None, "topic": (topic or "")[:500], "host": "babis", "source": "world",
-                              "opener": (opener or "")[:600], "storylet": storylet, "slot": slot}, outbox_dir)
+BRIEF_MAX = 600           # persona memory brief (oku_world /api/world/brief), per persona
 
-def request_chatter(channel, personas, topic, opener, turns, storylet=None, slot=None, outbox_dir=None, clock=time.time):
+def _briefs(briefs):
+    """{persona: brief} with short keys and briefs capped at BRIEF_MAX chars; {} for anything else."""
+    if not isinstance(briefs, dict): return {}
+    return {str(k)[:16]: str(v)[:BRIEF_MAX] for k, v in list(briefs.items())[:8] if v}
+
+def request_world_meeting(channel, topic, opener, storylet="PORADA", slot=None, outbox_dir=None, clock=time.time, briefs=None):
+    """Ask the bridge to post `opener` as Babiš (top-level in channel) and run a real porada in its thread.
+    Old bridges (before this field existed) answer 'rejected' because thread_ts is missing: safe by design.
+    briefs: optional {persona: memory brief} the bridge adds to each speaker's prompt (P-003 memory)."""
+    req = {"id": uuid.uuid4().hex[:12], "at": clock(), "channel": channel, "thread_ts": None,
+           "event_id": None, "topic": (topic or "")[:500], "host": "babis", "source": "world",
+           "opener": (opener or "")[:600], "storylet": storylet, "slot": slot}
+    if _briefs(briefs): req["briefs"] = _briefs(briefs)
+    return _append(REQUESTS, req, outbox_dir)
+
+def request_chatter(channel, personas, topic, opener, turns, storylet=None, slot=None, outbox_dir=None, clock=time.time,
+                    podnet=None, briefs=None, min_personas=2):
     """oku_world director (P-005): ask the bridge for a short persona exchange (<= 4 turns) in a persona channel.
     kind=chatter + source=world:chatter + no thread_ts: a bridge without chatter support answers 'rejected' (it only
-    starts a thread-less porada for source=world), so a premature live request is harmless."""
-    return _append(REQUESTS, {"id": uuid.uuid4().hex[:12], "at": clock(), "kind": "chatter", "source": "world:chatter",
-                              "channel": channel, "thread_ts": None, "event_id": None, "personas": list(personas)[:3],
-                              "topic": (topic or "")[:300], "opener": (opener or "")[:400], "turns": int(turns),
-                              "storylet": storylet, "slot": slot}, outbox_dir)
+    starts a thread-less porada for source=world), so a premature live request is harmless.
+    podnet (P-004 reaction): {url, kind, key}; then 1-2 personas and 1-2 turns, the opener carries the URL + comment
+    (top-level 'repost') and an optional second persona replies once in its thread. briefs: {persona: memory brief}."""
+    ps = list(personas)[:3]
+    if len(ps) < min_personas: raise ValueError("too few personas")
+    req = {"id": uuid.uuid4().hex[:12], "at": clock(), "kind": "chatter", "source": "world:chatter",
+           "channel": channel, "thread_ts": None, "event_id": None, "personas": ps,
+           "topic": (topic or "")[:300], "opener": (opener or "")[:400], "turns": int(turns),
+           "storylet": storylet, "slot": slot}
+    if podnet: req["podnet"] = {k: str(podnet.get(k) or "")[:500] for k in ("url", "kind", "key")}
+    if _briefs(briefs): req["briefs"] = _briefs(briefs)
+    return _append(REQUESTS, req, outbox_dir)
 
 def acks_for(req_id, outbox_dir=None):
     """All acks for a request id, oldest first (a chatter gets 'started' and later 'done')."""
