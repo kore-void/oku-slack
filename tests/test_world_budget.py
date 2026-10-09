@@ -60,3 +60,14 @@ def test_quiet_hours_wheel_live_and_kill_switch_deny(tmp_path, monkeypatch):
     assert budget.killed({}, None, kv.get, MON10) == "kill_switch:silenced" and budget.killed({}, None, kv.get, MON10 + 61) is None
     monkeypatch.setenv("OKU_WORLD_KILL", "1"); assert budget.killed({}) == "kill_switch:env"
     d = budget.check("post", [], MON10, C, kill="kill_switch:file"); assert not d["ok"] and d["reasons"] == ["kill_switch:file"]
+
+def test_chatter_request_counts_as_post_and_thread_once_per_subject():
+    rows = [dict(row("chatter.requested", MON10 - 600, "chatter", channel="C0C76ATGLAH", llm_calls=3), subject="chatter:2026-10-12 11:30"),
+            dict(row("chatter.started", MON10 - 590, "chatter", channel="C0C76ATGLAH"), subject="chatter:2026-10-12 11:30"),
+            dict(row("chatter.dry_run", MON10 - 500, "chatter", channel="C0C7BF296P4", llm_calls=3), subject="chatter:x")]
+    u = budget.usage(rows, MON10, C)
+    assert (u["chatter_today"], u["posts_today"], u["llm_today"]) == (1, 1, 3) and "C0C7BF296P4" not in u["channel_last"]
+    d = budget.check("chatter", rows, MON10, C, channel="C0C76ATGLAH", llm=3, turns=4)
+    assert not d["ok"] and d["reasons"][0].startswith("per_channel_gap C0C76ATGLAH")
+    assert budget.check("chatter", rows, MON10, C, channel="C0C7BF296P4", llm=3, turns=4)["ok"]
+    assert budget.check("chatter", rows, MON10, C, channel="C0C7BF296P4", turns=5)["reasons"] == ["chatter_max_turns 5>4"]

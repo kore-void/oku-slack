@@ -3,8 +3,10 @@ hours (Europe/Prague), "never while a wheel event is live", kill switch and dry 
 the budget is a PROJECTION of what the world already did (no separate counter that could drift).
 
 What counts:
-- top-level post: `agent.posted` (payload.top_level != false) and `porada.requested` (the bridge posts the opener);
-- chatter exchange: `chatter.started`; turns of one exchange are capped by chatter_max_turns;
+- top-level post: `agent.posted` (payload.top_level != false), `porada.requested` and `chatter.requested` (the bridge
+  posts the opener top-level);
+- chatter exchange: `chatter.requested` / `chatter.started`, counted once per subject (`chatter:<slot>`), so the
+  request and its later ack never count twice; turns of one exchange are capped by chatter_max_turns;
 - LLM calls charged to the world: sum of payload.llm_calls on rows from world-owned sources (agent, director,
   schedule, chatter, world). The porada charges its estimate (porada_llm_estimate) when it is requested.
 Dry-run rows (`*.dry_run`) never consume budget."""
@@ -16,7 +18,8 @@ DEFAULTS = {
     "posts_per_day": 6, "per_channel_gap_h": 3.0, "chatter_threads_per_day": 2, "chatter_max_turns": 4,
     "llm_calls_per_day": 40, "no_posts_while_wheel_live": True,
 }
-POST_TYPES = ("agent.posted", "porada.requested")
+POST_TYPES = ("agent.posted", "porada.requested", "chatter.requested")
+CHATTER_TYPES = ("chatter.requested", "chatter.started")
 WORLD_SOURCES = ("agent", "director", "schedule", "chatter", "world")
 
 def settings(raw=None):
@@ -48,7 +51,8 @@ def usage(rows, now, cfg):
     zone = cfg.get("timezone", tz.PRAGUE)
     day0 = tz.day_start(now, zone)
     u = {"day_start": day0, "posts_today": 0, "chatter_today": 0, "llm_today": 0, "channel_last": {}}
-    for r in rows:
+    chats = set()
+    for i, r in enumerate(rows):
         t, ts, pl = r["type"], r["ts"], r.get("payload") or {}
         if t.endswith(".dry_run"): continue
         if t in POST_TYPES and pl.get("top_level", True):
@@ -56,8 +60,9 @@ def usage(rows, now, cfg):
             if ch: u["channel_last"][ch] = max(u["channel_last"].get(ch, 0), ts)
             if ts >= day0: u["posts_today"] += 1
         if ts < day0: continue
-        if t == "chatter.started": u["chatter_today"] += 1
+        if t in CHATTER_TYPES: chats.add(r.get("subject") or f"row:{i}")
         if r.get("source") in WORLD_SOURCES: u["llm_today"] += int(pl.get("llm_calls", 0) or 0)
+    u["chatter_today"] = len(chats)
     return u
 
 def check(action, rows, now, cfg, channel=None, llm=0, turns=0, wheel_live=False, kill=None):
