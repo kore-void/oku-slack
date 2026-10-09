@@ -13,18 +13,20 @@ REQUESTS, ACKS, LIVE = "meeting_start.jsonl", "meeting_ack.jsonl", "live_threads
 MAX_AGE_S = 90.0          # older requests are stale (bridge was down) and never start a meeting
 _lock = threading.Lock()
 
-def outbox():
+def outbox(d=None):
+    """Explicit dir d (the oku_world service passes its source logs outbox), else env OKU_MEETING_OUTBOX, else repo logs."""
+    if d: return pathlib.Path(d)
     env = os.environ.get("OKU_MEETING_OUTBOX")
     return pathlib.Path(env) if env else pathlib.Path(__file__).resolve().parent.parent / "logs" / "outbox"
 
-def _append(name, obj):
-    d = outbox(); d.mkdir(parents=True, exist_ok=True)
+def _append(name, obj, d=None):
+    d = outbox(d); d.mkdir(parents=True, exist_ok=True)
     with _lock, open(d / name, "a", encoding="utf-8") as f: f.write(json.dumps(obj, ensure_ascii=False) + "\n")
     return obj
 
-def _read(name, offset=0):
+def _read(name, offset=0, d=None):
     """Complete lines from byte offset. Returns (objects, new_offset); a half-written last line is left for later."""
-    p = outbox() / name
+    p = outbox(d) / name
     try:
         with open(p, "rb") as f:
             size = f.seek(0, 2)
@@ -46,9 +48,17 @@ def request_meeting(channel, thread_ts, event_id=None, topic="", host="babis", c
     return _append(REQUESTS, {"id": uuid.uuid4().hex[:12], "at": clock(), "channel": channel, "thread_ts": thread_ts,
                               "event_id": event_id, "topic": (topic or "")[:500], "host": host})
 
-def ack_for(req_id):
+# ---------- world side (oku_world scheduler: standalone porada, no thread yet) ----------
+def request_world_meeting(channel, topic, opener, storylet="PORADA", slot=None, outbox_dir=None, clock=time.time):
+    """Ask the bridge to post `opener` as Babiš (top-level in channel) and run a real porada in its thread.
+    Old bridges (before this field existed) answer 'rejected' because thread_ts is missing: safe by design."""
+    return _append(REQUESTS, {"id": uuid.uuid4().hex[:12], "at": clock(), "channel": channel, "thread_ts": None,
+                              "event_id": None, "topic": (topic or "")[:500], "host": "babis", "source": "world",
+                              "opener": (opener or "")[:600], "storylet": storylet, "slot": slot}, outbox_dir)
+
+def ack_for(req_id, outbox_dir=None):
     """Latest ack for a request id, or None."""
-    acks, _ = _read(ACKS)
+    acks, _ = _read(ACKS, 0, outbox_dir)
     hit = [a for a in acks if a.get("id") == req_id]
     return hit[-1] if hit else None
 
@@ -87,9 +97,13 @@ class Inbox:
             self.done.add(rid)
             if self.clock() - float(r.get("at") or 0) > self.max_age:
                 log.info("meeting request %s stale, ignored", rid); ack(rid, "stale"); out.append((rid, "stale")); continue
-            try: status = self.on_request(r) or "rejected"
+            extra = {}
+            try:
+                res = self.on_request(r)
+                if isinstance(res, tuple): res, extra = res[0], dict(res[1] or {})
+                status = res or "rejected"
             except Exception as e: log.error("meeting request %s failed: %s", rid, type(e).__name__); status = "error"
-            ack(rid, status); out.append((rid, status))
+            ack(rid, status, **extra); out.append((rid, status))
         return out
 
     def run(self, period=1.0):

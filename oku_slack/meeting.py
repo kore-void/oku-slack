@@ -104,7 +104,7 @@ class Meeting:
         self.participants = participants
         self.stopped = False
         self.turns = 0
-        self.source, self.topic = source, topic  # source: human (@mention) | wheel (oku_wheel hand-off)
+        self.source, self.topic = source, topic  # source: human (@mention) | wheel (oku_wheel hand-off) | world (scheduled)
         self.wake = threading.Event()  # set by a human reply in the thread: next turn comes sooner
 
     def transcript(self):
@@ -146,7 +146,10 @@ class Meeting:
                                        blame=core.is_blame(cfg, self.humanize(last_text).lower()), history=history)
             if spk not in self.c.bridges: spk = next(p for p in self.participants if p in self.c.bridges)
             extra = []
-            if i == 0 and self.source == "wheel":
+            if i == 0 and self.source == "world":
+                extra.append("Poradu jsi právě svolal svou první zprávou (pravidelná ranní porada OKÚ"
+                             + (f", téma: {self.topic}" if self.topic else "") + "). Neopakuj úvod: rovnou vyvolej jménem prvního řečníka s požadavkem na čísla.")
+            elif i == 0 and self.source == "wheel":
                 extra.append("Poradu jsi právě svolal svou první zprávou (událost z kola štěstí OKÚ"
                              + (f": {self.topic}" if self.topic else "") + "). Neopakuj úvod: rovnou vyvolej jménem prvního řečníka s požadavkem na čísla.")
             elif i == 0: extra.append("Zahajuješ poradu: přivítej, shrň téma z první zprávy a vyvolej jménem prvního řečníka s požadavkem na čísla.")
@@ -231,17 +234,29 @@ class Coordinator:
         return any(c == ch for c, _ in self.active)
 
     def start_external(self, req):
-        """Wheel hand-off (oku_slack.handoff): real porada in req's channel/thread. Returns started | dup | rejected.
+        """File hand-off (oku_slack.handoff): real porada in req's channel/thread. Returns started | dup | rejected.
+        Wheel requests carry thread_ts (the wheel posted the opener). World requests (source=world, the oku_world
+        scheduler) carry no thread: the chair (Babiš) posts `opener` top-level first and the porada runs in its thread;
+        then the return value is ("started", {"thread_ts": ts}) so the ack tells the world where it runs.
         No double porada: refused while any meeting runs in that channel or thread."""
         ch, ts = req.get("channel"), req.get("thread_ts")
-        if not (ch and ts and self.bridges): return "rejected"
+        world = req.get("source") == "world"
+        if not (ch and self.bridges) or not (ts or (world and (req.get("opener") or "").strip())): return "rejected"
         with self.lock:
             if self.busy(ch):
-                core.log.info("wheel meeting refused ch=%s ts=%s: meeting already running", ch, ts); return "dup"
+                core.log.info("%s meeting refused ch=%s ts=%s: meeting already running", "world" if world else "wheel", ch, ts); return "dup"
+            if world and not ts:
+                chair = self.bridges.get("babis") or next(iter(self.bridges.values()))
+                text = re.sub(r"<[@!#][^>]*>", "", req.get("opener") or "").strip()[:600]
+                try: ts = chair.client.chat_postMessage(channel=ch, text=text)["ts"]
+                except Exception as e:
+                    core.log.error("world porada opener failed ch=%s: %s", ch, type(e).__name__); return "error"
             parts = [k for k in self.uid_map if k != "kalousek"] or list(self.uid_map)
-            m = self.active[(ch, ts)] = Meeting(self, ch, ts, parts, source="wheel", topic=req.get("topic") or "")
-        core.log.info("meeting start (wheel %s) ch=%s ts=%s participants=%s", req.get("event_id"), ch, ts, ",".join(parts))
-        self.start(m); return "started"
+            m = self.active[(ch, ts)] = Meeting(self, ch, ts, parts, source="world" if world else "wheel", topic=req.get("topic") or "")
+        core.log.info("meeting start (%s %s) ch=%s ts=%s participants=%s", "world" if world else "wheel",
+                      req.get("slot") if world else req.get("event_id"), ch, ts, ",".join(parts))
+        self.start(m)
+        return ("started", {"thread_ts": ts}) if world else "started"
 
     def _trim(self):
         while len(self.seen) > self.max_seen: self.seen.popitem(last=False)
