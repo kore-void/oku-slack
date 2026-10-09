@@ -15,6 +15,7 @@ from .. import handoff
 
 log = logging.getLogger("oku_world.scheduler")
 DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+PORADA_CAST = ("babis", "alenka", "bourak", "marty", "peta")   # bridge porada participants (kalousek excluded)
 PORADA_DEFAULTS = {"porada_schedule": "mon-fri 10:00", "porada_channel": "C0C6W8E6NP9", "porada_grace_min": 30,
                    "porada_llm_estimate": 12, "porada_ack_timeout_s": 120, "porada_enabled": True}
 
@@ -73,8 +74,10 @@ def topic_for(snap, slot_key, names=None, titles=None):
     top = sorted(((v, k) for k, v in blame.items() if v > 0), key=lambda x: (-x[0], x[1]))
     if top:
         ctx["blame_who"] = names.get(top[0][1], top[0][1]); ctx["blame_n"] = top[0][0]; cands.append("blame")
-    if res.get("hranolky", 80) < 60: cands.append("hranolky")
-    if res.get("kampan", 35) < 50: cands.append("kampan")
+    from . import state
+    th = state.THRESHOLDS
+    if res.get("hranolky", 80) < th.get("hranolky_low", 60): cands.append("hranolky")
+    if res.get("kampan", 60) < th.get("kampan_low", 40): cands.append("kampan")
     cands += ["dotace", "lajky"]
     exp = [x for x in (snap.get("recent") or []) if x.get("state") == "expired"]
     if exp:
@@ -133,11 +136,13 @@ class PoradaScheduler:
                             dedupe_key=f"budget:porada:{key}")
         if c.get("dry_run", True):
             would = {"file": "meeting_start.jsonl", "channel": ch, "source": "world", "host": "babis", "topic": topic,
-                     "opener_chars": len(opener), "llm_estimate": est}
+                     "opener_chars": len(opener), "llm_estimate": est,
+                     "brief_chars": {k: len(v) for k, v in getattr(svc, "briefs_for", lambda ps: {})(list(PORADA_CAST)).items()}}
             log.info("porada %s DRY RUN: would request a porada in %s, topic=%r", key, ch, topic)
             return d.record("porada.dry_run", "babis", subj, dict(base, would=would, chair="babis"), source="schedule", parents=[due["id"]],
                             dedupe_key=f"porada:dry_run:{key}")
-        req = handoff.request_world_meeting(ch, topic, opener, slot=key, outbox_dir=svc.outbox_dir, clock=svc.clock)
+        req = handoff.request_world_meeting(ch, topic, opener, slot=key, outbox_dir=svc.outbox_dir, clock=svc.clock,
+                                            briefs=getattr(svc, "briefs_for", lambda ps: {})(list(PORADA_CAST)))
         row = d.record("porada.requested", "babis", subj, dict(base, request_id=req["id"], llm_calls=est, chair="babis", top_level=True),
                        source="schedule", parents=[due["id"]], dedupe_key=f"porada:requested:{key}")
         d.kv_set("porada:pending", f"{req['id']}|{key}|{now}|{row['id'] if row else ''}")

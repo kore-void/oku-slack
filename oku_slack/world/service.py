@@ -4,9 +4,10 @@
   carry none of the proxy/tunnel headers (CF-*, X-Forwarded-*, Forwarded, X-Real-IP, ...) -> otherwise 403;
 - routes: GET /healthz, GET /api/world[?events=N&player=p], GET /api/budget, POST /api/events (diary drafts from
   local sources; validated and deduped like every other source);
+- routes also: GET /api/world/brief[?persona=x] (persona memory briefs, P-003, used by the bridge for replies);
 - loop (tick_s): podnet pollers (X API only with X_BEARER_TOKEN; pplx when enabled), then ingest wheel outbox +
   usage.jsonl + legacy wheel diary + podnet inbox (logs/inbox/podnety.jsonl), then the podnet reactor (P-004), the
-  scheduler (porada) and the chatter director (P-005);
+  scheduler (porada), the chatter director (P-005) and the consequence engine (P-006, consequences.toml);
 - dry_run = true by default: nothing is handed to the bridge; `porada.dry_run` / `chatter.dry_run` rows instead.
 
 Paths: diary/logs dir = env OKU_WORLD_LOGS, else <checkout>/logs (world.sqlite3, world.jsonl, oku_world.log,
@@ -15,7 +16,7 @@ OKU_WORLD_SOURCE_LOGS, else the diary logs dir. Config: [world] in config.toml (
 OKU_WORLD_DRY_RUN=0/1 overrides dry_run. The config is re-read when the file changes (no restart needed)."""
 import json, logging, logging.handlers, os, pathlib, threading, time, tomllib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from . import backfill as backfill_mod, budget, chatter, ingest, log as wlog, podnet, pplx, react, scheduler, state, tz, xsource
+from . import backfill as backfill_mod, budget, chatter, consequences, ingest, log as wlog, memory, podnet, pplx, react, scheduler, state, tz, xsource
 
 log = logging.getLogger("oku_world")
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -25,8 +26,8 @@ PROXY_HEADERS = ("CF-Connecting-IP", "CF-Ray", "CF-IPCountry", "Cf-Warp-Tag-Id",
 ALLOWED_PEERS = {"127.0.0.1"}
 DEFAULTS = dict(budget.DEFAULTS, **scheduler.PORADA_DEFAULTS, **chatter.CHATTER_DEFAULTS, **react.DEFAULTS, regime="A_scarce",
                 run_id="oku-world-1", port=8798, tick_s=15, legacy_wheel_tail=True, usage_tail=True, wheel_outbox=True,
-                podnet_inbox=True)
-RESERVED_SOURCES = ("wheel", "backfill", "bridge", "podnet")   # each has its own tail/engine
+                podnet_inbox=True, consequences_enabled=True, briefs_in_handoff=True)
+RESERVED_SOURCES = ("wheel", "backfill", "bridge", "podnet", "consequence")   # each has its own tail/engine
 NAMES = {"babis": "Babiš", "alenka": "Alenka", "bourak": "Bourák", "marty": "Marty", "peta": "Peťa", "kalousek": "Kalousek",
          "monika": "Monika", "kore": "Kore", "icik": "ICIK"}
 
@@ -83,6 +84,11 @@ class WorldService:
         self.diary = wlog.Diary(self.logs_dir / "world.sqlite3", jsonl=self.logs_dir / "world.jsonl", clock=clock,
                                 regime=c["regime"], run_id=c["run_id"])
         self.ctx = wheel_ctx() if ctx is None else ctx
+        self.consequences = consequences.Engine(self)
+        cq = self.consequences.cfg()   # seeds + thresholds (P-006); players.toml world_<k> settings still win
+        state.THRESHOLDS.update(cq.get("thresholds") or {})
+        seeds = dict(self.ctx.get("seeds") or {})
+        self.ctx = dict(self.ctx, seeds=dict(cq.get("seeds") or {}, **{k: v for k, v in seeds.items() if v != state.RESOURCES[k][0]}))
         self.inbox_path = podnet.inbox_path(self.logs_dir)
         self.names = dict(NAMES, **{k: v.get("name", k) for k, v in (self.ctx.get("players") or {}).items()})
         self.titles = dict(self.ctx.get("titles") or {})
@@ -135,6 +141,8 @@ class WorldService:
             except Exception as e: self.tick_errors += 1; log.warning("scheduler failed: %s", type(e).__name__)
             try: res["chatter"] = [r["type"] for r in self.chatter.tick(now) if r]
             except Exception as e: self.tick_errors += 1; log.warning("chatter director failed: %s", type(e).__name__)
+            try: res["consequences"] = len(self.consequences.tick(now))
+            except Exception as e: self.tick_errors += 1; log.warning("consequences failed: %s", type(e).__name__)
             self.last_tick, self.last_ingest = now, res
         return res
 
@@ -158,7 +166,21 @@ class WorldService:
         return {"ok": True, "service": "oku_world", "version": self.diary.version, "dry_run": c["dry_run"], "events": self.diary.count(),
                 "last_tick": self.last_tick, "tick_errors": self.tick_errors, "ingest": self.diary.stats, "uptime_s": round(self.clock() - self.started_at),
                 "podnet": {"inbox": str(self.inbox_path), "x": self.pollers["x"].state, "pplx": self.pollers["pplx"].state,
-                           "pplx_last": self.pollers["pplx"].last}}
+                           "pplx_last": self.pollers["pplx"].last},
+                "consequences": {"applied": self.consequences.applied, "error": self.consequences.error}}
+
+    def briefs_for(self, personas):
+        """{persona: memory brief} for hand-off lines (P-003); {} when disabled."""
+        if not self.settings().get("briefs_in_handoff", True): return {}
+        return memory.briefs(self.world.state(), personas, self.names, self.titles)
+
+    def api_brief(self, query):
+        st = self.world.state(); p = query.get("persona")
+        if p:
+            if p not in state.PERSONAS: return None
+            b = memory.brief(st, p, self.names, self.titles)
+            return {"persona": p, "brief": b, "chars": len(b), "as_of_seq": st["as_of_seq"]}
+        return {"as_of_seq": st["as_of_seq"], "briefs": memory.briefs(st, state.PERSONAS, self.names, self.titles)}
 
     def api_world(self, query):
         snap = self.world.snapshot()
@@ -204,6 +226,9 @@ def make_handler(svc):
                 if path == "/healthz": return self._send(200, svc.health())
                 if path == "/api/world": return self._send(200, svc.api_world(q))
                 if path == "/api/budget": return self._send(200, svc.budget_view())
+                if path == "/api/world/brief":
+                    b = svc.api_brief(q)
+                    return self._send(200, b) if b is not None else self._send(404, {"error": "unknown_persona"})
                 return self._send(404, {"error": "not_found"})
             except Exception as e:
                 log.warning("GET %s failed: %s", path, type(e).__name__); return self._send(500, {"error": "internal"})

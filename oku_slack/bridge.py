@@ -38,6 +38,22 @@ class Bridge:
     def prompt_for(self, ch):
         return self.capak_prompt if (self.capak_prompt and ch == self.capak) else self.prompt
 
+    def world_brief(self):
+        """Persona memory brief from oku_world (loopback GET /api/world/brief, short timeout, cached). Failure-isolated:
+        any problem (world down, slow, disabled with [world] brief_in_replies = false) -> "" and the reply works as before."""
+        try:
+            if not (self.cfg.get("world") or {}).get("brief_in_replies", True): return ""
+            from .world import view as world_view
+            return world_view.fetch_brief(self.persona) or ""
+        except Exception as e:
+            core.log.warning("world brief failed: %s", type(e).__name__); return ""
+
+    def system_for(self, ch):
+        p = self.prompt_for(ch); brief = self.world_brief()
+        if not brief: return p
+        from .chatter import MEMORY_LABEL
+        return p + "\n\n" + MEMORY_LABEL + brief
+
     def history(self, event):
         ch = event["channel"]; msgs = [event]
         if event.get("thread_ts"):
@@ -65,7 +81,7 @@ class Bridge:
         core.log.info("event ch=%s ts=%s persona=%s", ch, event["ts"], self.persona)
         hist = self.history(event)
         usage.set_context(persona=self.persona, channel=ch, thread_ts=ts, kind="solo"); usage.take_last()
-        try: reply = (self.gen(self.prompt_for(ch), hist) or "").strip()
+        try: reply = (self.gen(self.system_for(ch), hist) or "").strip()
         except Exception as e:
             core.log.error("llm error: %s", type(e).__name__); reply = FALLBACK
         if reply in meeting.TERSE:

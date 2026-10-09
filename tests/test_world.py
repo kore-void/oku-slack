@@ -100,7 +100,7 @@ def _history(e, clk):
 
 def test_projection_blame_witnessed_acts_stats_and_seeds():
     e, st, clk = mk(); _history(e, clk); d, w = world_of(e, clk); s = w.state()
-    assert s["resources"] == {"dotace": 5000, "kampan": 35, "hranolky": 80, "lajky": 1200}   # no consequences yet
+    assert s["resources"] == {"dotace": 5000, "kampan": 60, "hranolky": 80, "lajky": 1200}   # no consequence rows
     assert s["blame"] == {"kore": 1, "icik": 1, "kalousek": 1}
     assert s["totals"]["spun"] == 2 and s["totals"]["expired"] == 1 and s["totals"]["live"] == 1 and s["totals"]["done"] == 1
     kore = s["players"]["kore"]; icik = s["players"]["icik"]
@@ -124,7 +124,7 @@ def test_projection_rebuild_from_scratch_equals_incremental():
 def test_world_delta_clamped_and_metrics_window():
     st0 = wstate.initial(); ev = lambda seq, t, ts, **pl: {"seq": seq, "id": f"we_{seq:04d}", "type": t, "ts": ts, "payload": pl, "source": "wheel"}
     s = wstate.project([ev(1, "world.delta", 1, resource="kampan", delta=500), ev(2, "world.delta", 2, resource="dotace", delta=-200)])
-    assert s["resources"]["kampan"] == 100 and s["resources"]["dotace"] == 4800 and st0["resources"]["kampan"] == 35
+    assert s["resources"]["kampan"] == 100 and s["resources"]["dotace"] == 4800 and st0["resources"]["kampan"] == 60
     m = wstate.metrics([ev(1, "wheel.spin", 10), ev(2, "wheel.spin", 1000), ev(3, "wheel.live", 1001)], since_ts=500)
     assert m["spun"] == 1 and m["live"] == 1 and m["live_rate"] == 1.0
 

@@ -80,8 +80,9 @@ def facts(snap, names=None, titles=None, porada_topic=None):
     ctx = {k: f"{int(v):,}".replace(",", "\u00a0") for k, v in res.items()}; have = set()
     top = sorted(((v, k) for k, v in blame.items() if v > 0), key=lambda x: (-x[0], x[1]))
     if top: ctx["blame_who"] = names.get(top[0][1], top[0][1]); ctx["blame_n"] = top[0][0]; have.add("blame")
-    if res.get("hranolky", 80) < 60: have.add("hranolky_low")
-    if res.get("kampan", 35) < 50: have.add("kampan_low")
+    th = state.THRESHOLDS
+    if res.get("hranolky", 80) < th.get("hranolky_low", 60): have.add("hranolky_low")
+    if res.get("kampan", 60) < th.get("kampan_low", 40): have.add("kampan_low")
     exp = [x for x in (snap.get("recent") or []) if x.get("state") == "expired"]
     if exp: ctx["missed_title"] = titles.get(exp[-1].get("key"), exp[-1].get("key") or "?"); have.add("missed")
     if m.get("bridge_calls"): ctx["bridge_calls"] = m["bridge_calls"]; have.add("busy")
@@ -169,10 +170,12 @@ class ChatterDirector:
         if c.get("dry_run", True):
             log.info("chatter %s DRY RUN: %s in %s (%s), personas=%s turns=%d", key, p["storylet"], p["channel_name"], p["channel"],
                      ",".join(p["personas"]), p["turns"])
+            bc = {k: len(v) for k, v in getattr(svc, "briefs_for", lambda ps: {})(p["personas"]).items()}
             return d.record("chatter.dry_run", lead, subj, dict(base, opener=p["opener"], would={"file": "meeting_start.jsonl", "kind": "chatter",
-                            "source": "world:chatter", "top_level": True}), source="chatter", parents=[due["id"]], dedupe_key=f"chatter:dry_run:{key}")
+                            "source": "world:chatter", "top_level": True, "brief_chars": bc}), source="chatter", parents=[due["id"]],
+                            dedupe_key=f"chatter:dry_run:{key}")
         req = handoff.request_chatter(p["channel"], p["personas"], p["topic"], p["opener"], p["turns"], storylet=p["storylet"], slot=key,
-                                      outbox_dir=svc.outbox_dir, clock=svc.clock)
+                                      outbox_dir=svc.outbox_dir, clock=svc.clock, briefs=getattr(svc, "briefs_for", lambda ps: {})(p["personas"]))
         row = d.record("chatter.requested", lead, subj, dict(base, request_id=req["id"], llm_calls=est, top_level=True, opener_chars=len(p["opener"])),
                        source="chatter", parents=[due["id"]], dedupe_key=f"chatter:requested:{key}")
         d.kv_set("chatter:pending", json.dumps({"rid": req["id"], "slot": key, "at": now, "parent": row["id"] if row else None,

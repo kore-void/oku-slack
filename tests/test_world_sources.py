@@ -87,7 +87,8 @@ def test_projection_bridge_actors_memory_porada_and_metrics(tmp_path):
     w = wstate.World(d, {}, lambda: NOW); s = w.state()
     assert s["bridge"]["calls"] == 28 and s["bridge"]["by_persona"] == {"babis": 2, "kalousek": 1, "marty": 25} and s["bridge"]["by_kind"]["meeting"] == 2
     assert s["actors"]["babis"]["kind"] == "persona" and s["actors"]["babis"]["by_source"] == {"bridge": 2, "schedule": 2}
-    assert len(s["memory"]["marty"]) == wstate.MAX_MEMORY and s["memory"]["babis"][-1]["type"] == "budget.denied"
+    assert "marty" not in s["memory"] and s["memory"]["babis"][-1]["type"] == "budget.denied"   # bridge.reply: counted, not remembered
+    assert [m["type"] for m in s["memory"]["babis"]] == ["porada.dry_run", "budget.denied"] and s["memory"]["babis"][0]["topic"] == "Kampaň"
     assert s["porada"]["dry_run"] == 1 and s["porada"]["denied"] == 1 and s["porada"]["last"]["status"] == "quiet_hours"
     snap = w.snapshot(); m = snap["metrics_7d"]
     assert m["bridge_calls"] == 28 and m["dry_runs"] == 1 and m["budget_denied"] == 1 and snap["sources"]["bridge"]["events"] == 28

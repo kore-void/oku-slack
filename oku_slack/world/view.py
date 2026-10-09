@@ -49,7 +49,7 @@ def svet_text(snap, names=None, titles=None, p=None, now=None, korun=None):
         txt = "; ".join(f"{PERSONAS.get(a['persona'], a['persona'])}: {act_text(a['act'], a['ts'], titles)}" for a in mine[:3])
         lines.append(f"🧾 Tvoje skutky, které si postavy pamatují: {txt or 'zatím žádné'}")
         if korun is not None: lines.append(f"🪙 Tvůj zůstatek: {num(korun)} OKÚ korun")
-    lines.append("_Svět zatím jen pozoruje: důsledky přijdou v další fázi._")
+    lines.append("_Svět si pamatuje: události mění zdroje, vinu i vztahy postav._")
     return "\n".join(lines)
 
 def fetch_world(player=None, timeout=2.0, url=None):
@@ -62,6 +62,22 @@ def fetch_world(player=None, timeout=2.0, url=None):
             return json.loads(r.read().decode("utf-8"))
     except Exception:
         return None
+
+_BRIEFS = {}   # persona -> (fetched_at, brief)
+
+def fetch_brief(persona, timeout=0.6, url=None, ttl=120.0, clock=time.time):
+    """GET <world>/api/world/brief?persona=x (loopback, no proxies, short timeout, cached ttl s). "" on any failure."""
+    now = clock(); hit = _BRIEFS.get(persona)
+    if hit and now - hit[0] < ttl: return hit[1]
+    base = (url or os.environ.get("OKU_WORLD_URL") or WORLD_URL).rstrip("/")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(base + "/api/world/brief?persona=" + urllib.parse.quote(persona), timeout=timeout) as r:
+            b = str((json.loads(r.read().decode("utf-8")) or {}).get("brief") or "")[:600]
+    except Exception:
+        b = ""
+    _BRIEFS[persona] = (now, b)
+    return b
 
 def svet_remote(eng, p=None, fetch=None):
     """`/kolo svet` reply: world snapshot from oku_world + the player's korun from the wheel; fallback line if down."""

@@ -99,8 +99,9 @@ ROLE = {
 }
 
 class Meeting:
-    def __init__(self, coord, channel, thread_ts, participants, source="human", topic=""):
+    def __init__(self, coord, channel, thread_ts, participants, source="human", topic="", briefs=None):
         self.c, self.ch, self.ts = coord, channel, thread_ts
+        self.briefs = briefs if isinstance(briefs, dict) else {}  # world porada: {persona: memory brief} (P-003)
         self.participants = participants
         self.stopped = False
         self.turns = 0
@@ -255,7 +256,8 @@ class Coordinator:
                 except Exception as e:
                     core.log.error("world porada opener failed ch=%s: %s", ch, type(e).__name__); return "error"
             parts = [k for k in self.uid_map if k != "kalousek"] or list(self.uid_map)
-            m = self.active[(ch, ts)] = Meeting(self, ch, ts, parts, source="world" if world else "wheel", topic=req.get("topic") or "")
+            m = self.active[(ch, ts)] = Meeting(self, ch, ts, parts, source="world" if world else "wheel", topic=req.get("topic") or "",
+                                                briefs=req.get("briefs") if world else None)
         core.log.info("meeting start (%s %s) ch=%s ts=%s participants=%s", "world" if world else "wheel",
                       req.get("slot") if world else req.get("event_id"), ch, ts, ",".join(parts))
         self.start(m)
@@ -331,6 +333,10 @@ class Coordinator:
             lines.append(f"{name}: {meeting.humanize(m.get('text')) if meeting else m.get('text')}")
         names = ", ".join("@" + self.cfg["personas"][k]["name"].split()[0] for k in self.bridges if k != spk)
         system = b.prompt + "\n\n" + MEETING_RULES + "\n" + ROLE.get(spk, "") + f"\nKolegové na poradě: {names}."
+        brief = str(((meeting.briefs if meeting else None) or {}).get(spk) or "")[:600]
+        if brief:
+            from .chatter import MEMORY_LABEL
+            system += "\n" + MEMORY_LABEL + brief
         user = "PŘEPIS PORADY:\n" + "\n".join(lines[-40:]) + "\n\n" + " ".join(extra) + f"\nTeď mluvíš ty ({p['name']})."
         usage.set_context(persona=spk, channel=ch, thread_ts=ts, kind="meeting")
         text = self.generate_ok(spk, system, [{"role": "user", "content": user}])

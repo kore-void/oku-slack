@@ -2,8 +2,9 @@
 
     state = initial(ctx); for ev in diary: apply(state, ev, ctx)   ==   project(diary, ctx)
 
-Covers resources (Dotace/Kampaň/Hranolky/Lajky; they move only through `world.delta`/`consequence.delta` rows,
-which nothing writes before P-006), blame with evidence, actors (players, personas, external), per-player stats
+Covers resources (Dotace/Kampaň/Hranolky/Lajky; they move only through `consequence.applied` rows written by
+consequences.py from consequences.toml, or legacy `world.delta`/`consequence.delta`), relationships (persona -> persona
+or player, from consequence rows), blame with evidence, actors (players, personas, external), per-player stats
 and witnessed acts, per-persona memory (the <= 20 newest rows a persona witnessed), bridge activity, the scheduled
 porada, per-source counters and the wheel fold (spun/live/missed/blame; any wheel row is optional input).
 `ctx` carries config facts (event hosts, players' command personas, seeds) so the fold stays pure."""
@@ -12,7 +13,7 @@ import copy
 REGIMES = {"A_scarce": "režim A (vzácné koruny)", "B_abundant": "režim B (hojné koruny)", "C_no_currency": "režim C (bez měny)"}
 RESOURCES = {  # key: (seed, range or None, emoji, Czech label)
     "dotace": (5000, None, "💶", "Dotace"),
-    "kampan": (35, (0, 100), "📣", "Kampaň"),
+    "kampan": (60, (0, 100), "📣", "Kampaň"),   # P-006: was 35 with a 'low' threshold of 50 (permanent crisis)
     "hranolky": (80, (0, 200), "🍟", "Hranolky"),
     "lajky": (1200, None, "👍", "Lajky"),
 }
@@ -21,7 +22,9 @@ HUMAN_VIA = {"slack", "room"}
 PLAYER_STATS = ("spins", "confirms", "confirms_on_time", "missed", "bets", "bets_won", "bets_lost", "wagered", "won",
                 "commands", "votes", "catches", "quiz_right", "quiz_wrong", "reactions", "ui")
 MAX_ACTS = 20    # witnessed acts kept per player per persona (newest last)
-MAX_MEMORY = 20  # memory rows kept per persona (newest last)
+MAX_MEMORY = 20  # memory rows kept per persona (newest last); bridge.reply is counted in st["bridge"], not remembered
+THRESHOLDS = {"kampan_low": 40, "hranolky_low": 60}   # storylet/porada facts ("low" = below); consequences.toml overrides
+NO_MEMORY = ("bridge.reply",)
 WHEEL_STATES = ("live", "done", "expired", "vetoed")
 
 def ctx_from_cfg(cfg):
@@ -43,7 +46,9 @@ def initial(ctx=None):
             "players": {p: _new_player() for p in (ctx.get("players") or {})},
             "personas": {},  # host persona -> wheel outcome counters {"spun", "live", "done", "expired", "vetoed"}
             "actors": {},    # actor -> {"kind", "events", "last_ts", "by_source"}
-            "memory": {},    # persona -> [{"we", "type", "ts", "about", "note"}] newest last
+            "memory": {},    # persona -> [{"we", "type", "ts", "about", "note", "topic", "with", "channel"}] newest last
+            "relations": {}, # who -> {whom: score} (consequence rows; persona->persona and persona->player)
+            "consequences": {"applied": 0, "by_rule": {}, "last": None},
             "bridge": {"calls": 0, "by_persona": {}, "by_kind": {}, "last_ts": None},
             "porada": {"due": 0, "dry_run": 0, "requested": 0, "started": 0, "failed": 0, "denied": 0, "last": None},
             "chatter": {"due": 0, "dry_run": 0, "requested": 0, "started": 0, "ended": 0, "failed": 0, "denied": 0, "skipped": 0,
@@ -69,10 +74,19 @@ def _persona(st, k):
     return st["personas"].setdefault(k or "?", {"spun": 0, "live": 0, "done": 0, "expired": 0, "vetoed": 0})
 
 def _remember(st, persona, ev, note=None):
-    if persona not in PERSONAS: return
+    if persona not in PERSONAS or ev["type"] in NO_MEMORY: return
     mem = st["memory"].setdefault(persona, [])
     if mem and mem[-1]["we"] == ev.get("id"): return
-    mem.append({"we": ev.get("id"), "type": ev["type"], "ts": ev.get("ts"), "about": ev.get("actor"), "note": note})
+    pl = ev.get("payload") or {}
+    parts = pl.get("participants") or pl.get("personas") or []
+    item = {"we": ev.get("id"), "type": ev["type"], "ts": ev.get("ts"), "about": ev.get("actor"),
+            "note": note or pl.get("storylet") or pl.get("pick") or pl.get("kind") or pl.get("key")}
+    if pl.get("topic"): item["topic"] = str(pl["topic"])[:80]
+    w = [p for p in parts if isinstance(p, str) and p != persona][:3]
+    if w: item["with"] = w
+    if pl.get("channel_name"): item["channel"] = pl["channel_name"]
+    if ev["type"] in ("wheel.expired",) and pl.get("missing"): item["missing"] = [m for m in pl["missing"] if isinstance(m, str)][:4]
+    mem.append(item)
     del mem[:-MAX_MEMORY]
 
 def _actor(st, a, src, ts, ctx):
@@ -89,6 +103,7 @@ def _wheel_eid(subject):
 def witnesses(ev, ctx=None):
     """Personas that 'saw' this diary row (memory rule, plan 1.7)."""
     ctx = ctx or {}; pl = ev.get("payload") or {}; out = []
+    if ev.get("type", "").startswith("consequence."): return out
     for k in (ev.get("actor"), pl.get("host"), pl.get("persona"), pl.get("chair")):
         if k in PERSONAS and k not in out: out.append(k)
     if not pl.get("host") and pl.get("key"):
@@ -167,7 +182,21 @@ def apply(st, ev, ctx=None):
     elif t == "budget.denied" and pl.get("storylet") == "PORADA":
         st["porada"]["denied"] += 1
         st["porada"]["last"] = {"we": we, "type": t, "ts": ts, "topic": pl.get("topic"), "status": ",".join(pl.get("reasons") or [])}
-    elif t in ("world.delta", "consequence.delta"):  # P-006 consequences; nothing writes them yet
+    elif t == "consequence.applied":  # P-006: effects resolved when the row was written (consequences.py)
+        c = st["consequences"]; rule = pl.get("rule") or "?"
+        c["applied"] += 1; c["by_rule"][rule] = c["by_rule"].get(rule, 0) + 1
+        c["last"] = {"we": we, "rule": rule, "trigger": pl.get("trigger"), "ts": ts}
+        for fx in pl.get("effects") or []:
+            if not isinstance(fx, dict): continue
+            k = fx.get("resource")
+            if k in st["resources"]:
+                v = st["resources"][k] + int(fx.get("delta", 0) or 0); rng = RESOURCES[k][1]
+                st["resources"][k] = max(rng[0], min(rng[1], v)) if rng else v
+            if isinstance(fx.get("blame"), str): _blame(st, fx["blame"], int(fx.get("n", 1) or 1), we)
+            rel = fx.get("relation")
+            if isinstance(rel, list) and len(rel) == 2 and all(isinstance(x, str) for x in rel):
+                r = st["relations"].setdefault(rel[0], {}); r[rel[1]] = r.get(rel[1], 0) + int(fx.get("delta", 0) or 0)
+    elif t in ("world.delta", "consequence.delta"):  # legacy single-effect rows
         k = pl.get("resource")
         if k in st["resources"]:
             v = st["resources"][k] + int(pl.get("delta", 0) or 0); rng = RESOURCES[k][1]
@@ -237,7 +266,8 @@ class World:
                 "blame": dict(sorted(st["blame"].items(), key=lambda kv: (-kv[1], kv[0]))),
                 f"metrics_{days}d": metrics(self.log.events(since_ts=now - days * 86400), now - days * 86400),
                 "totals": dict(st["totals"]), "bridge": copy.deepcopy(st["bridge"]), "porada": copy.deepcopy(st["porada"]),
-                "chatter": copy.deepcopy(st["chatter"]),
+                "chatter": copy.deepcopy(st["chatter"]), "relations": copy.deepcopy(st["relations"]),
+                "consequences": copy.deepcopy(st["consequences"]),
                 "sources": copy.deepcopy(st["sources"]), "actors": copy.deepcopy(st["actors"]),
                 "memory": {k: v[-5:] for k, v in st["memory"].items()},
                 "personas": copy.deepcopy(st["personas"]), "recent": list(st["recent"]),
