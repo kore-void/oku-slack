@@ -67,12 +67,14 @@ def request_world_meeting(channel, topic, opener, storylet="PORADA", slot=None, 
     return _append(REQUESTS, req, outbox_dir)
 
 def request_chatter(channel, personas, topic, opener, turns, storylet=None, slot=None, outbox_dir=None, clock=time.time,
-                    podnet=None, briefs=None, min_personas=2):
+                    podnet=None, briefs=None, min_personas=2, news=None):
     """oku_world director (P-005): ask the bridge for a short persona exchange (<= 4 turns) in a persona channel.
     kind=chatter + source=world:chatter + no thread_ts: a bridge without chatter support answers 'rejected' (it only
     starts a thread-less porada for source=world), so a premature live request is harmless.
     podnet (P-004 reaction): {url, kind, key}; then 1-2 personas and 1-2 turns, the opener carries the URL + comment
-    (top-level 'repost') and an optional second persona replies once in its thread. briefs: {persona: memory brief}."""
+    (top-level 'repost') and an optional second persona replies once in its thread. briefs: {persona: memory brief}.
+    news (with podnet): {headline, outlet, lede, person, published_at, generate}: the bridge posts headline + URL + a generated
+    in-character reaction instead of the opener's template comment (an older bridge just posts the opener)."""
     ps = list(personas)[:3]
     if len(ps) < min_personas: raise ValueError("too few personas")
     req = {"id": uuid.uuid4().hex[:12], "at": clock(), "kind": "chatter", "source": "world:chatter",
@@ -80,6 +82,10 @@ def request_chatter(channel, personas, topic, opener, turns, storylet=None, slot
            "topic": (topic or "")[:300], "opener": (opener or "")[:400], "turns": int(turns),
            "storylet": storylet, "slot": slot}
     if podnet: req["podnet"] = {k: str(podnet.get(k) or "")[:500] for k in ("url", "kind", "key")}
+    if podnet and isinstance(news, dict):   # news reaction (world/news.py): the bridge writes the reaction from headline + lede
+        req["news"] = {"headline": str(news.get("headline") or "")[:280], "outlet": str(news.get("outlet") or "")[:64],
+                       "lede": str(news.get("lede") or "")[:300], "person": str(news.get("person") or "")[:64],
+                       "published_at": news.get("published_at"), "generate": bool(news.get("generate", True))}
     if _briefs(briefs): req["briefs"] = _briefs(briefs)
     return _append(REQUESTS, req, outbox_dir)
 

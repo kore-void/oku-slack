@@ -88,7 +88,7 @@ owner_user_id = "U0C6XAN3EG3"       # Kore
 # handed to the bridge and nothing is posted. Env OKU_WORLD_DRY_RUN=0/1 overrides. Kill switch: kill_switch = true,
 # or create logs/world.kill (diary logs dir), or env OKU_WORLD_KILL=1.
 [world]
-dry_run = true
+dry_run = false                  # LIVE since 2026-10-09 (Kore's go-live: porada, chatter, podnety, news)
 kill_switch = false
 regime = "A_scarce"
 timezone = "Europe/Prague"
@@ -101,7 +101,7 @@ porada_grace_min = 30            # a slot later than this (service was down) is 
 porada_llm_estimate = 12         # LLM calls charged to the world budget per porada (meeting = 8-12 turns)
 porada_ack_timeout_s = 120
 # Budget (decision D2): autonomous actions only; human-triggered replies/poradas never count.
-posts_per_day = 6                # top-level posts per day, all world sources together
+posts_per_day = 16               # top-level posts per day, all world sources together (6 -> 16 with news, Kore 2026-10-09)
 per_channel_gap_h = 3            # at most 1 top-level post per channel per 3 h
 chatter_threads_per_day = 2      # autonomous persona-to-persona threads (P-005)
 chatter_max_turns = 4            # opener + replies in one thread; the bridge also hard-caps at 4
@@ -128,6 +128,8 @@ podnet_max_age_h = 6             # a podnet waiting on quiet hours / wheel live 
 briefs_in_handoff = true
 brief_in_replies = true          # read by the oku_slack bridge (needs the merged code)
 consequences_enabled = true
+# News (OKÚ zpravodajství, docs/WORLD.md "News"): config in oku_slack/world/news.toml (feeds, persona -> real person,
+# news budget: 10 reactions/day, 2 per person/day, 1 h gap, channel #oku-socky). Same dry_run / kill switch / quiet hours.
 
 # Persona channels the chatter may use (world picks; the bridge only accepts these when the table is present).
 [world.chatter_channels]

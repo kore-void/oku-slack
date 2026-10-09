@@ -80,6 +80,9 @@ class Reactor:
         off = int(d.kv_get("podnet:react_seq", 0) or 0)
         for r in d.events(after_seq=off, types=["podnet.received"], limit=50):
             if d.kv_get("podnet:pending"): break           # live: one hand-off at a time
+            pl = r["payload"] or {}
+            if pl.get("kind") == "news" and pl.get("source") in ("news_rss", "news_pplx"):   # news.py NewsDirector owns these
+                d.kv_set("podnet:react_seq", r["seq"]); continue
             res = self.decide(r, now, c)
             if res == "wait": break
             if res: out.append(res)

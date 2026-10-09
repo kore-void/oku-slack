@@ -63,7 +63,8 @@ def test_blocked_and_used_channels_are_avoided_when_possible():
 
 def test_templates_follow_the_satire_guardrails():
     ctx = {"dotace": "5 000", "kampan": "20", "hranolky": "40", "lajky": "1 200", "blame_who": "ICIK", "blame_n": 3,
-           "missed_title": "Kantýna", "bridge_calls": 12, "porada_topic": "Kampaň stojí na 20/100."}
+           "missed_title": "Kantýna", "bridge_calls": 12, "porada_topic": "Kampaň stojí na 20/100.",
+           "news_headline": "Babiš jednal s Bruselem o rozpočtu.", "news_outlet": "iROZHLAS"}
     for s in chatter.STORYLETS:
         assert s["lead"] in chatter.CAST and set(s["pool"]) <= set(chatter.CAST) and s["lead"] not in s["pool"] and s["channel"] in chatter.CHANNELS
         for t in [s["topic"]] + s["openers"]:

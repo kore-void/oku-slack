@@ -37,3 +37,8 @@ def _no_real_logs(monkeypatch, tmp_path):
     def _no_http(*a, **k): raise AssertionError("tests must not call the real X API")
     monkeypatch.setattr(_x, "http_get", _no_http)
     getattr(_view, "_BRIEFS", {}).clear()
+    # news (world/news.py): never the committed news.toml (enabled feeds) in service tests, never the real network
+    monkeypatch.setenv("OKU_NEWS_CONFIG", str(tmp_path / "absent-news.toml"))
+    from oku_slack.world import news as _news
+    def _no_news_http(*a, **k): raise AssertionError("tests must not fetch real news")
+    monkeypatch.setattr(_news, "http_get", _no_news_http)

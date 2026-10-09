@@ -57,6 +57,7 @@ TOPICS = [
     ("lajky", "Lajky {lajky}. Marty, proč to není milion?"),
     ("missed", "Propadla nám událost {missed_title}. Kdo nepřišel a proč?"),
     ("busy", "Za poslední týden {bridge_calls} odpovědí na Slacku. Je to produktivita, nebo kecání?"),
+    ("news", "Dnešní titulek ({news_outlet}): {news_headline} Co s tím uděláme a jak to otočíme v náš prospěch?"),
     ("generic", "Pravidelná porada: výsledky týdne, KPI a kdo za co může."),
 ]
 OPENERS = [
@@ -65,8 +66,9 @@ OPENERS = [
     "Tak, ranní porada OKÚ začíná. {topic} Makáme, nekrademe, chci výsledky.",
 ]
 
-def topic_for(snap, slot_key, names=None, titles=None):
-    """Deterministic (slot-keyed RNG) topic + opener from world state; template fallback. Returns (kind, topic, opener)."""
+def topic_for(snap, slot_key, names=None, titles=None, news=None):
+    """Deterministic (slot-keyed RNG) topic + opener from world state; template fallback. Returns (kind, topic, opener).
+    news: today's headline about Babiš ({headline, outlet}, news.headline_for) -> the 'news' topic, weighted x3."""
     names = names or {}; titles = titles or {}
     res = snap.get("resources") or {}; blame = snap.get("blame") or {}; m = snap.get("metrics_7d") or {}
     ctx = {k: f"{int(v):,}".replace(",", "\u00a0") for k, v in res.items()}
@@ -83,6 +85,10 @@ def topic_for(snap, slot_key, names=None, titles=None):
     if exp:
         ctx["missed_title"] = titles.get(exp[-1].get("key"), exp[-1].get("key") or "?"); cands.append("missed")
     if m.get("bridge_calls"): ctx["bridge_calls"] = m["bridge_calls"]; cands.append("busy")
+    if news and news.get("headline"):
+        h = str(news["headline"]).strip()
+        ctx["news_headline"] = h if h.endswith((".", "?", "!", "…")) else h + "."; ctx["news_outlet"] = news.get("outlet") or "tisk"
+        cands += ["news"] * 3
     rng = random.Random(int(hashlib.sha256(f"PORADA:{slot_key}".encode()).hexdigest()[:12], 16))
     kind = rng.choice(cands) if cands else "generic"
     tmpl = dict(TOPICS)[kind]
@@ -124,13 +130,15 @@ class PoradaScheduler:
     def decide(self, due, key, now, c):
         d, svc = self.svc.diary, self.svc
         snap = svc.world.snapshot(players=False)
-        kind, topic, opener = topic_for(snap, key, getattr(svc, "names", {}), getattr(svc, "titles", {}))
+        nh = getattr(svc, "news_headline", lambda *a, **k: None)("babis", now)
+        kind, topic, opener = topic_for(snap, key, getattr(svc, "names", {}), getattr(svc, "titles", {}), news=nh)
         ch = c["porada_channel"]; est = int(c["porada_llm_estimate"])
         rows = d.events(since_ts=min(tz.day_start(now, c.get("timezone", tz.PRAGUE)), now - float(c["per_channel_gap_h"]) * 3600) - 1)
         kill = budget.killed(c, svc.logs_dir, d.kv_get, now)
         dec = budget.check("post", rows, now, c, channel=ch, llm=est, wheel_live=snap.get("wheel_live"), kill=kill)
         subj = f"schedule:porada:{key}"
         base = {"storylet": "PORADA", "slot": key, "channel": ch, "topic": topic, "topic_kind": kind, "why": dec["why"]}
+        if kind == "news" and nh: base["news_url"] = nh.get("url")
         if not dec["ok"]:
             return d.record("budget.denied", "babis", subj, dict(base, reasons=dec["reasons"]), source="schedule", parents=[due["id"]],
                             dedupe_key=f"budget:porada:{key}")

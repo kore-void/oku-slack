@@ -87,8 +87,19 @@ def parse(output, accounts, streams=(), now=None, max_age_h=48):
                 seen.add(url); item["title"] = _title(line, raw); out.append(item)
     return out
 
+CLI_SLOTS = threading.BoundedSemaphore(1)   # one void-pplx-ask at a time for the whole world (podnet + news pollers)
+
 def run_cli(command, q, mode, timeout_s):
-    """Run the pplx CLI once (argument list, no shell). Returns stdout text (UTF-8, errors replaced)."""
+    """Run the pplx CLI once (argument list, no shell). Returns stdout text (UTF-8, errors replaced).
+    Waits for CLI_SLOTS, so the podnet and news pollers never run two pplx calls at once."""
+    return slot_call(_run_cli, command, q, mode, timeout_s)
+
+def slot_call(fn, command, q, mode, timeout_s):
+    if not CLI_SLOTS.acquire(timeout=float(timeout_s) * 3 + 60): raise subprocess.TimeoutExpired(command, timeout_s)
+    try: return fn(command, q, mode, timeout_s)
+    finally: CLI_SLOTS.release()
+
+def _run_cli(command, q, mode, timeout_s):
     exe = shutil.which(command) or command
     env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
     r = subprocess.run([exe, "--mode", mode, "--timeout-s", str(int(timeout_s)), q], capture_output=True, timeout=float(timeout_s) + 30,

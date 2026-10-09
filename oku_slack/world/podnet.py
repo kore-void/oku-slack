@@ -93,8 +93,37 @@ def validate(obj, now=None):
     if not isinstance(src, str) or not SOURCE_RE.match(src): raise Invalid("bad_source")
     test = obj.get("test", False)
     if not isinstance(test, bool): raise Invalid("bad_test")
-    return {"url": url, "kind": kind, "title": title, "author": author, "observed_at": _ts(obj.get("observed_at"), now),
-            "source": src, "test": test, "host": host_of(url), "key": "podnet:" + hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]}
+    out = {"url": url, "kind": kind, "title": title, "author": author, "observed_at": _ts(obj.get("observed_at"), now),
+           "source": src, "test": test, "host": host_of(url), "key": "podnet:" + hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]}
+    if kind == "news": out.update(news_fields(obj, now))
+    return out
+
+PERSONA_RE = re.compile(r"^[a-z]{2,16}$")
+NEWS_KEYS = ("outlet", "published_at", "person", "persona", "persons", "lede", "in_headline")
+
+def news_fields(obj, now):
+    """Optional fields of a kind=news podnet (news.py): outlet, published_at, person, persona, persons, lede, in_headline."""
+    f = {}
+    if obj.get("outlet") is not None: f["outlet"] = _short(obj.get("outlet"), 64, "outlet")
+    if obj.get("person") is not None: f["person"] = _short(obj.get("person"), 64, "person")
+    if obj.get("lede") is not None:
+        lede = _short(str(obj.get("lede"))[:300], 300, "lede")
+        if lede: f["lede"] = lede
+    if obj.get("published_at") not in (None, ""):
+        try: f["published_at"] = _ts(obj.get("published_at"), now)
+        except Invalid: raise Invalid("bad_published_at")
+    pa = obj.get("persona")
+    if pa is not None:
+        if not isinstance(pa, str) or not PERSONA_RE.match(pa): raise Invalid("bad_persona")
+        f["persona"] = pa
+    ps = obj.get("persons")
+    if ps is not None:
+        if not isinstance(ps, list) or len(ps) > 8 or not all(isinstance(x, str) and PERSONA_RE.match(x) for x in ps): raise Invalid("bad_persons")
+        f["persons"] = list(dict.fromkeys(ps))
+    if obj.get("in_headline") is not None:
+        if not isinstance(obj.get("in_headline"), bool): raise Invalid("bad_in_headline")
+        f["in_headline"] = obj["in_headline"]
+    return {k: v for k, v in f.items() if v is not None}
 
 def to_draft(p):
     """Clean podnet -> `podnet.received` diary draft (deduped by URL)."""
@@ -102,6 +131,7 @@ def to_draft(p):
     actor = ("ext:" + re.sub(r"[^A-Za-z0-9_.@-]", "", a).lstrip("@").lower())[:64] if a and re.sub(r"[^A-Za-z0-9_.@-]", "", a).lstrip("@") else None
     pl = {"url": p["url"], "kind": p["kind"], "host": p["host"], "author": p["author"], "title": p["title"],
           "observed_at": p["observed_at"], "source": p["source"], "test": p["test"]}
+    pl.update({k: p[k] for k in NEWS_KEYS if p.get(k) is not None})
     return {"type": "podnet.received", "source": "podnet", "actor": actor, "subject": p["key"], "dedupe_key": p["key"],
             "payload": {k: v for k, v in pl.items() if v is not None}}
 
@@ -127,13 +157,16 @@ class InboxSource(ingest.JsonlTail):
                                    "dedupe_key": f"podnet:rejected:{lo}:{hashlib.sha1(raw).hexdigest()[:12]}"})
         return super().poll(now)
 
-def append(url, kind="other", title=None, author=None, source="manual", test=False, observed_at=None, path=None, logs_dir=None, now=None):
-    """Validate and append one podnet line to the inbox. Returns the line written. Raises Invalid."""
+def append(url, kind="other", title=None, author=None, source="manual", test=False, observed_at=None, path=None, logs_dir=None, now=None,
+           news=None):
+    """Validate and append one podnet line to the inbox. Returns the line written. Raises Invalid.
+    news: optional kind=news fields (outlet, published_at, person, persona, persons, lede, in_headline)."""
     now = time.time() if now is None else now
     obj = {"url": url, "kind": kind, "author": author, "title": title, "observed_at": observed_at if observed_at is not None else now,
            "source": source, "test": bool(test)}
+    if news and kind == "news": obj.update({k: v for k, v in news.items() if k in NEWS_KEYS and v is not None})
     clean = validate(obj, now)
-    line = {k: clean[k] for k in ("url", "kind", "author", "title", "observed_at", "source", "test") if clean[k] is not None}
+    line = {k: clean[k] for k in ("url", "kind", "author", "title", "observed_at", "source", "test") + NEWS_KEYS if clean.get(k) is not None}
     p = pathlib.Path(path) if path else inbox_path(logs_dir)
     p.parent.mkdir(parents=True, exist_ok=True)
     with _lock, open(p, "a", encoding="utf-8") as f: f.write(json.dumps(line, ensure_ascii=False) + "\n")

@@ -5,6 +5,7 @@
 - routes: GET /healthz, GET /api/world[?events=N&player=p], GET /api/budget, POST /api/events (diary drafts from
   local sources; validated and deduped like every other source);
 - routes also: GET /api/world/brief[?persona=x] (persona memory briefs, P-003, used by the bridge for replies);
+  GET /api/world/news[?date=YYYY-MM-DD&format=md] (OKÚ zpravodajství: today's matched headlines per person, news.py);
 - loop (tick_s): podnet pollers (X API only with X_BEARER_TOKEN; pplx when enabled), then ingest wheel outbox +
   usage.jsonl + legacy wheel diary + podnet inbox (logs/inbox/podnety.jsonl), then the podnet reactor (P-004), the
   scheduler (porada), the chatter director (P-005) and the consequence engine (P-006, consequences.toml);
@@ -16,7 +17,7 @@ OKU_WORLD_SOURCE_LOGS, else the diary logs dir. Config: [world] in config.toml (
 OKU_WORLD_DRY_RUN=0/1 overrides dry_run. The config is re-read when the file changes (no restart needed)."""
 import json, logging, logging.handlers, os, pathlib, threading, time, tomllib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from . import backfill as backfill_mod, budget, chatter, consequences, ingest, log as wlog, memory, podnet, pplx, react, scheduler, state, tz, xsource
+from . import backfill as backfill_mod, budget, chatter, consequences, ingest, log as wlog, memory, news, podnet, pplx, react, scheduler, state, tz, xsource
 
 log = logging.getLogger("oku_world")
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -71,7 +72,7 @@ def retire_legacy_jsonl(logs_dir):
     return None
 
 class WorldService:
-    def __init__(self, config_path=None, logs_dir=None, source_logs=None, wheel_db=None, clock=time.time, ctx=None):
+    def __init__(self, config_path=None, logs_dir=None, source_logs=None, wheel_db=None, clock=time.time, ctx=None, news_config=None):
         self.config_path = pathlib.Path(config_path or os.environ.get("OKU_CONFIG") or ROOT / "config.toml")
         self.logs_dir = pathlib.Path(logs_dir or os.environ.get("OKU_WORLD_LOGS") or ROOT / "logs")
         self.source_logs = pathlib.Path(source_logs or os.environ.get("OKU_WORLD_SOURCE_LOGS") or self.logs_dir)
@@ -97,8 +98,10 @@ class WorldService:
                         "usage": ingest.UsageTail(self.diary, self.source_logs / "usage.jsonl"),
                         "wheel_legacy": ingest.LegacyWheelDb(self.diary, self.wheel_db),
                         "podnet_inbox": podnet.InboxSource(self.diary, self.inbox_path, clock)}
-        self.pollers = {"x": xsource.XSource(self), "pplx": pplx.PplxSource(self)}
+        self.news_cfg = news.Config(news_config)
+        self.pollers = {"x": xsource.XSource(self), "pplx": pplx.PplxSource(self), "news": news.NewsSource(self)}
         self.reactor = react.Reactor(self)
+        self.news = news.NewsDirector(self)
         self.scheduler = scheduler.PoradaScheduler(self)
         self.chatter = chatter.ChatterDirector(self)
         self.started_at, self.last_tick, self.tick_errors, self.lock = clock(), None, 0, threading.RLock()
@@ -137,6 +140,9 @@ class WorldService:
                 except Exception as e: self.tick_errors += 1; log.warning("source %s failed: %s", name, type(e).__name__)
             try: res["podnet"] = [r["type"] for r in self.reactor.tick(now) if r]
             except Exception as e: self.tick_errors += 1; log.warning("podnet reactor failed: %s", type(e).__name__)
+            try: res["news"] = [r["type"] for r in self.news.tick(now) if r]
+            except Exception as e: self.tick_errors += 1; log.warning("news director failed: %s", type(e).__name__)
+            if (res.get("podnet_inbox") or {}).get("ok") or res.get("news"): self.pollers["news"].write_digest(now)   # digest file
             try: res["scheduler"] = [r["type"] for r in self.scheduler.tick(now) if r]
             except Exception as e: self.tick_errors += 1; log.warning("scheduler failed: %s", type(e).__name__)
             try: res["chatter"] = [r["type"] for r in self.chatter.tick(now) if r]
@@ -145,6 +151,26 @@ class WorldService:
             except Exception as e: self.tick_errors += 1; log.warning("consequences failed: %s", type(e).__name__)
             self.last_tick, self.last_ingest = now, res
         return res
+
+    def news_settings(self):
+        """news.toml (oku_slack/world/news.toml or env OKU_NEWS_CONFIG), re-read on change."""
+        return self.news_cfg.get()
+
+    def news_headline(self, persona=None, now=None, hours=18):
+        """Freshest guard-passing headline about persona's real person (or anyone) for porada/chatter topics, or None."""
+        try: return news.headline_for(self.diary, self.clock() if now is None else now, persona, hours)
+        except Exception as e: log.info("news headline lookup failed: %s", type(e).__name__); return None
+
+    def api_news(self, query):
+        c = self.settings(); now = self.clock()
+        date = query.get("date")
+        if date and not __import__("re").match(r"^\d{4}-\d{2}-\d{2}$", date): return None
+        dg = news.digest(self.diary, now, self.news_settings(), c.get("timezone", tz.PRAGUE), date)
+        nc = self.news_settings()
+        dg["budget"] = dict(self.news.usage(now, c.get("timezone", tz.PRAGUE)), reactions_per_day=nc["reactions_per_day"],
+                            per_person_per_day=nc["per_person_per_day"])
+        if query.get("format") == "md": dg["markdown"] = news.markdown(dg)
+        return dg
 
     def budget_view(self, now=None):
         now = self.clock() if now is None else now; c = self.settings()
@@ -159,7 +185,10 @@ class WorldService:
                 "chatter_now": {k: v for k, v in budget.check("chatter", rows, now, c, wheel_live=state.wheel_live(self.world.state(), now),
                                                               kill=kill).items() if k in ("ok", "reasons")},
                 "chatter_schedule": c["chatter_schedule"] if c.get("chatter_enabled", True) else None,
-                "chatter_pending": bool(self.diary.kv_get("chatter:pending"))}
+                "chatter_pending": bool(self.diary.kv_get("chatter:pending")),
+                "news": dict(self.news.usage(now, c.get("timezone", tz.PRAGUE)), reactions_per_day=self.news_settings()["reactions_per_day"],
+                             per_person_per_day=self.news_settings()["per_person_per_day"], channel_gap_h=self.news_settings()["channel_gap_h"],
+                             pending=bool(self.diary.kv_get("news:pending")))}
 
     def health(self):
         c = self.settings()
@@ -167,7 +196,10 @@ class WorldService:
                 "last_tick": self.last_tick, "tick_errors": self.tick_errors, "ingest": self.diary.stats, "uptime_s": round(self.clock() - self.started_at),
                 "podnet": {"inbox": str(self.inbox_path), "x": self.pollers["x"].state, "pplx": self.pollers["pplx"].state,
                            "pplx_last": self.pollers["pplx"].last},
-                "consequences": {"applied": self.consequences.applied, "error": self.consequences.error}}
+                "consequences": {"applied": self.consequences.applied, "error": self.consequences.error},
+                "news": {"rss": self.pollers["news"].state, "pplx": self.pollers["news"].pplx_state, "config_error": self.news_cfg.error,
+                         "last_rss": self.pollers["news"].last_rss, "last_pplx": self.pollers["news"].last_pplx,
+                         "feeds_ok": sum(1 for f in self.pollers["news"].feeds.values() if f.get("ok")), "feeds": len(self.pollers["news"].feeds)}}
 
     def briefs_for(self, personas):
         """{persona: memory brief} for hand-off lines (P-003); {} when disabled."""
@@ -226,6 +258,9 @@ def make_handler(svc):
                 if path == "/healthz": return self._send(200, svc.health())
                 if path == "/api/world": return self._send(200, svc.api_world(q))
                 if path == "/api/budget": return self._send(200, svc.budget_view())
+                if path == "/api/world/news":
+                    n = svc.api_news(q)
+                    return self._send(200, n) if n is not None else self._send(400, {"error": "bad_date"})
                 if path == "/api/world/brief":
                     b = svc.api_brief(q)
                     return self._send(200, b) if b is not None else self._send(404, {"error": "unknown_persona"})

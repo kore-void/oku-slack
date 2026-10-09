@@ -66,6 +66,10 @@ STORYLETS = [
      "topic": "{bridge_calls} odpovědí na Slacku za týden. Obsah, nebo kecání?",
      "openers": ["Za týden {bridge_calls} odpovědí na Slacku. To je obsah! Nebo kecání, podle toho, kdo se ptá.",
                  "Statistika týdne: {bridge_calls} odpovědí. Chci z toho udělat reels, kdo se přidá?"]},
+    {"key": "ZPRAVY_DNE", "channel": "socky", "lead": "marty", "pool": ["babis", "kalousek", "alenka"], "needs": "news_today", "weight": 2,
+     "topic": "Dnešní titulek ({news_outlet}): {news_headline}",
+     "openers": ["Ranní přehled tisku, kolegové. {news_outlet}: {news_headline} Jak z toho uděláme obsah?",
+                 "Tohle dnes píše {news_outlet}: {news_headline} Kdo to okomentuje první?"]},
     {"key": "DISKO_PATEK", "channel": "disko", "lead": "peta", "pool": ["bourak", "marty", "alenka"], "needs": None, "weight": 2,
      "topic": "Páteční disko OKÚ: kdo dělá playlist a kdo platí hranolky?",
      "openers": ["Páteční disko OKÚ se blíží. Playlist mám, chybí mi jen někdo, kdo zaplatí hranolky.",
@@ -73,8 +77,8 @@ STORYLETS = [
 ]
 BY_KEY = {s["key"]: s for s in STORYLETS}
 
-def facts(snap, names=None, titles=None, porada_topic=None):
-    """World facts the storylets may need (from the projection snapshot + diary-derived porada topic)."""
+def facts(snap, names=None, titles=None, porada_topic=None, news=None):
+    """World facts the storylets may need (from the projection snapshot + diary-derived porada topic + today's news headline)."""
     names = names or {}; titles = titles or {}
     res = snap.get("resources") or {}; blame = snap.get("blame") or {}; m = snap.get("metrics_7d") or {}
     ctx = {k: f"{int(v):,}".replace(",", "\u00a0") for k, v in res.items()}; have = set()
@@ -87,6 +91,9 @@ def facts(snap, names=None, titles=None, porada_topic=None):
     if exp: ctx["missed_title"] = titles.get(exp[-1].get("key"), exp[-1].get("key") or "?"); have.add("missed")
     if m.get("bridge_calls"): ctx["bridge_calls"] = m["bridge_calls"]; have.add("busy")
     if porada_topic: ctx["porada_topic"] = str(porada_topic)[:200]; have.add("porada_today")
+    if news and news.get("headline"):
+        h = str(news["headline"]).strip()[:200]
+        ctx["news_headline"] = h if h.endswith((".", "?", "!", "…")) else h + "."; ctx["news_outlet"] = news.get("outlet") or "tisk"; have.add("news_today")
     return ctx, have
 
 def pick(slot_key, ctx, have, avoid_storylets=(), avoid_channels=(), blocked_channels=(), max_turns=4, channels=None):
@@ -147,7 +154,8 @@ class ChatterDirector:
         rows = self.today(now, c); day0 = tz.day_start(now, c.get("timezone", tz.PRAGUE))
         today = [r for r in rows if r["ts"] >= day0]
         porada = [r for r in today if r["type"] in ("porada.started", "porada.requested", "porada.dry_run") and (r["payload"] or {}).get("topic")]
-        ctx, have = facts(snap, getattr(svc, "names", {}), getattr(svc, "titles", {}), porada[-1]["payload"]["topic"] if porada else None)
+        nh = getattr(svc, "news_headline", lambda *a, **k: None)(None, now)
+        ctx, have = facts(snap, getattr(svc, "names", {}), getattr(svc, "titles", {}), porada[-1]["payload"]["topic"] if porada else None, news=nh)
         used = [r["payload"] for r in today if r["type"] in ("chatter.dry_run", "chatter.requested")]
         u = budget.usage(rows, now, c); gap = float(c["per_channel_gap_h"]) * 3600
         blocked = {ch for ch, t in u["channel_last"].items() if now - t < gap}

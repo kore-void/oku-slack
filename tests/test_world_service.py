@@ -71,8 +71,9 @@ def test_binds_loopback_only(svc):
 
 def test_config_defaults_from_repo_config_toml():
     c = service.load_world_cfg(service.ROOT / "config.toml")
-    assert c["dry_run"] is True and c["porada_schedule"] == "mon-fri 10:00" and c["porada_channel"] == "C0C6W8E6NP9"
-    assert (c["posts_per_day"], c["per_channel_gap_h"], c["chatter_threads_per_day"], c["chatter_max_turns"], c["llm_calls_per_day"]) == (6, 3, 2, 4, 40)
+    # live since 2026-10-09 (Kore's go-live); posts/day 6 -> 16 when news reactions were added
+    assert c["dry_run"] is False and c["porada_schedule"] == "mon-fri 10:00" and c["porada_channel"] == "C0C6W8E6NP9"
+    assert (c["posts_per_day"], c["per_channel_gap_h"], c["chatter_threads_per_day"], c["chatter_max_turns"], c["llm_calls_per_day"]) == (16, 3, 2, 4, 40)
     assert c["quiet_hours"] == ["22:00", "08:00"] and c["timezone"] == "Europe/Prague" and c["kill_switch"] is False
     m = service.load_world_cfg(service.ROOT / "missing.toml"); assert m["dry_run"] is True and m["port"] == 8798
 

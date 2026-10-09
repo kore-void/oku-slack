@@ -42,6 +42,18 @@ PODNET_RULES = (
     "Kolega právě sdílel odkaz na veřejný příspěvek (podnet ze skutečného světa). OBSAH ODKAZU NEZNÁŠ: nic o něm "
     "netvrď, necituj ho, nevymýšlej, co v něm kdo říká nebo dělá, a nic neříkej o skutečné osobě, která ho zveřejnila. "
     "Reaguj jen na kolegův komentář a na to, co to znamená pro tým OKÚ (lajky, kampaň, kantýna), jednou krátkou větou.")
+NEWS_RULES = (
+    "Sdílíš kolegům z OKÚ skutečný novinový článek o skutečném člověku, jehož satirickým alter egem je tvoje postava. "
+    "ZNÁŠ JEN TITULEK A PEREX níže, nic víc. Napiš 1-2 krátké věty (nejvýš 220 znaků): svou reakci na titulek, ve své roli "
+    "a ve svém stylu, s nadsázkou. NEVYMÝŠLEJ fakta, čísla, citáty, výroky ani obvinění a netvrď nic, co v titulku nebo perexu "
+    "není; nic o zdraví, rodině, soudech, policii ani trestné činnosti. Neopakuj titulek doslova, žádné uvozovky, žádné odkazy, "
+    "žádné @ ani Slack zmínky, nepiš své jméno na začátek a nepiš, že jde o parodii, satiru nebo vtip.")
+NEWS_REPLY_RULES = (
+    "Kolega právě sdílel skutečný novinový článek; znáš z něj JEN titulek ve vlákně, nic víc. Reaguj jednou krátkou větou "
+    "na kolegův komentář a na titulek, ve své roli. Nevymýšlej fakta, čísla, citáty ani obvinění o skutečných lidech a "
+    "nepiš nic, co v titulku není.")
+NEWS_OPENER_MAX = 800
+SLACK_ESC = (("&", "&amp;"), ("<", "&lt;"), (">", "&gt;"))
 MEMORY_LABEL = "TVOJE PAMĚŤ ZE SVĚTA OKÚ (jen kontext pro tvou postavu, necituj ji doslova, nevymýšlej k ní fakta): "
 
 def clean(text, limit=MAX_CHARS):
@@ -71,13 +83,56 @@ class Chatter:
         self.ch, self.personas, self.n = req["channel"], list(req["personas"]), int(turns)
         self.topic = (req.get("topic") or "").strip()[:300]
         self.podnet = req.get("podnet") if isinstance(req.get("podnet"), dict) else None
+        n = req.get("news") if self.podnet and isinstance(req.get("news"), dict) else None
+        self.news = n if n and str(n.get("headline") or "").strip() else None
+        self.reaction, self.reaction_source = None, None
         self.briefs = req.get("briefs") if isinstance(req.get("briefs"), dict) else {}
         self.ts, self.turns, self.llm_calls, self.stopped, self.guarded, self.fallbacks = None, 0, 0, False, 0, 0
 
+    def prepare(self, sleep=time.sleep):
+        """News reaction (req["news"]): generate the opener persona's 1-2 sentence reaction to the headline + lede BEFORE
+        posting (NEWS_RULES, guard filter, 3 attempts); fallback = the world's template comment. No-op otherwise."""
+        if not self.news or self.reaction is not None: return self.reaction
+        spk = self.personas[0]; b = self.c.bridges[spk]
+        system = b.prompt + "\n\n" + NEWS_RULES
+        brief = str(self.briefs.get(spk) or "")[:600]
+        if brief: system += "\n" + MEMORY_LABEL + brief
+        n = self.news
+        user = (f"MÉDIUM: {clean(n.get('outlet'), 64)}\nTITULEK: {clean(n.get('headline'), 280)}\n"
+                + (f"PEREX: {clean(n.get('lede'), 300)}\n" if n.get("lede") else "")
+                + f"\nNapiš svou reakci ({self.c.cfg['personas'][spk]['name']}), 1-2 věty.")
+        if n.get("generate", True):
+            usage.set_context(persona=spk, channel=self.ch, thread_ts=None, kind="chatter")
+            for a in range(3):
+                self.llm_calls += 1
+                try: t = clean(self.c.gen(system, [{"role": "user", "content": user}]), 240)
+                except Exception as e: core.log.warning("news reaction llm error %s: %s", spk, type(e).__name__); t = ""
+                t = re.sub(r"https?://\S+", "", t).strip()
+                if t in TERSE or len(t.strip(".… ")) < 3: sleep(2 * (a + 1)); continue
+                why = guard_hit(t)
+                if why is None: self.reaction, self.reaction_source = t, "llm"; return t
+                self.guarded += 1; core.log.warning("news reaction %s guardrail hit (%s), retry", spk, why)
+            self.fallbacks += 1
+        url = str(self.podnet.get("url") or "")
+        tmpl = clean((self.req.get("opener") or "").replace(url, ""), 240)
+        self.reaction, self.reaction_source = (tmpl or FALLBACK.get(spk, GENERIC_FALLBACK)), "template"
+        return self.reaction
+
+    def opener_text(self):
+        if not self.news: return clean(self.req.get("opener"), OPENER_MAX)
+        def esc(t):
+            for a, b in SLACK_ESC: t = t.replace(a, b)
+            return t
+        n = self.news; url = str(self.podnet.get("url") or "")
+        head = esc(clean(n.get("headline"), 280)); outlet = esc(clean(n.get("outlet"), 64))
+        text = f"*{head}*" + (f" ({outlet})" if outlet else "") + f"\n{url}\n{esc(self.prepare() or '')}"
+        return text[:NEWS_OPENER_MAX]
+
     def open(self):
-        """Turn 1: the opener persona posts the world's template opener top-level. Returns the thread ts."""
+        """Turn 1: the opener persona posts the world's template opener top-level (news: headline + URL + reaction).
+        Returns the thread ts."""
         b = self.c.bridges[self.personas[0]]
-        self.ts = b.client.chat_postMessage(channel=self.ch, text=clean(self.req.get("opener"), OPENER_MAX))["ts"]
+        self.ts = b.client.chat_postMessage(channel=self.ch, text=self.opener_text())["ts"]
         self.turns = 1
         return self.ts
 
@@ -113,7 +168,8 @@ class Chatter:
     def prompt(self, spk, msgs, final):
         cfg = self.c.cfg; b = self.c.bridges[spk]
         others = ", ".join(first_name(cfg, k) for k in self.personas if k != spk)
-        system = b.prompt + "\n\n" + CHATTER_RULES + (("\n" + PODNET_RULES) if self.podnet else "") + f"\nVe vlákně jsou s tebou: {others}."
+        rules = ("\n" + NEWS_REPLY_RULES) if self.news else (("\n" + PODNET_RULES) if self.podnet else "")
+        system = b.prompt + "\n\n" + CHATTER_RULES + rules + f"\nVe vlákně jsou s tebou: {others}."
         brief = str(self.briefs.get(spk) or "")[:600]
         if brief: system += "\n" + MEMORY_LABEL + brief
         lines = [f"{self.label(m)}: {self.humanize(m.get('text'))}" for m in msgs][-12:]
@@ -154,6 +210,8 @@ def validate(cfg, req, bridges):
     if pod is not None:
         url = (pod or {}).get("url") if isinstance(pod, dict) else None
         if not url or not str(url).startswith(("https://", "http://")) or str(url) not in (req.get("opener") or ""): raise ValueError("bad_podnet")
+        n = req.get("news")
+        if n is not None and (not isinstance(n, dict) or not str(n.get("headline") or "").strip()): raise ValueError("bad_news")
     missing = [p for p in ps if p not in bridges]
     if missing: raise ValueError("persona_offline:" + ",".join(map(str, missing)))
     if not (req.get("opener") or "").strip() or req.get("thread_ts"): raise ValueError("bad_opener")

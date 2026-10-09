@@ -274,9 +274,14 @@ class Coordinator:
         ch = req["channel"]
         if any(v.get("skit_running") for v in self.live_threads().values()):
             core.log.info("world chatter refused ch=%s: wheel skit live", ch); return ("rejected", {"reason": "wheel_live"})
+        ch_obj = chatter.Chatter(self, dict(req, personas=personas), turns)
+        if ch_obj.news:   # news reaction: generate it before taking the lock (LLM call), only if the channel is free
+            with self.lock:
+                if self.busy(ch): core.log.info("world chatter refused ch=%s: channel busy", ch); return "dup"
+            try: ch_obj.prepare()
+            except Exception as e: core.log.error("news reaction failed ch=%s: %s", ch, type(e).__name__); return "error"
         with self.lock:
             if self.busy(ch): core.log.info("world chatter refused ch=%s: channel busy", ch); return "dup"
-            ch_obj = chatter.Chatter(self, dict(req, personas=personas), turns)
             try: ts = ch_obj.open()
             except Exception as e:
                 core.log.error("world chatter opener failed ch=%s: %s", ch, type(e).__name__); return "error"
@@ -294,7 +299,8 @@ class Coordinator:
                 except Exception as e: core.log.warning("chatter done ack failed: %s", type(e).__name__)
                 core.log.info("chatter end ch=%s ts=%s turns=%d llm_calls=%d", ch, ts, ch_obj.turns, ch_obj.llm_calls)
         self.chatter_thread = threading.Thread(target=go, daemon=True, name="chatter"); self.chatter_thread.start()
-        return ("started", {"thread_ts": ts, "turns": turns, "personas": personas})
+        extra = {"reaction": ch_obj.reaction_source} if ch_obj.news else {}
+        return ("started", dict({"thread_ts": ts, "turns": turns, "personas": personas}, **extra))
 
     def live_threads(self):
         try:
