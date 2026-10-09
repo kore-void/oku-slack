@@ -116,6 +116,18 @@ chatter_grace_min = 30
 chatter_ack_timeout_s = 120      # no 'started' ack by then -> chatter.failed no_ack
 chatter_done_timeout_s = 900     # started but no 'done' ack by then -> chatter.ended timeout
 legacy_wheel_tail = true         # also read the old in-wheel diary (wheel.sqlite3:world_events, read-only) until the outbox wheel is deployed
+# Real-life triggers (P-004, docs/WORLD.md "Podnety"): every feeder drops podnety into <diary logs>/inbox/podnety.jsonl;
+# the reactor plans one persona 'repost' (URL + <= 2 sentences) + optional single reply per podnet, inside the budget.
+podnet_inbox = true
+podnet_react = true
+podnet_reactions_per_day = 2     # reactions to podnety per day (on top of the shared post/LLM budget)
+podnet_reply_rate = 0.5          # chance that a second persona replies once in the repost's thread
+podnet_max_age_h = 6             # a podnet waiting on quiet hours / wheel live / channel gap is dropped after this
+# Persona memory (P-003): briefs (<= 600 chars) go into chatter/porada hand-offs; the bridge also fetches
+# GET /api/world/brief for normal replies (failure-isolated). Consequences (P-006): oku_slack/world/consequences.toml.
+briefs_in_handoff = true
+brief_in_replies = true          # read by the oku_slack bridge (needs the merged code)
+consequences_enabled = true
 
 # Persona channels the chatter may use (world picks; the bridge only accepts these when the table is present).
 [world.chatter_channels]
@@ -124,3 +136,26 @@ dotace = "C0C75CZ2UCT"    # #oku-dotace-desk
 socky = "C0C76ATANTX"     # #oku-socky
 disko = "C0C75CZPRUK"     # #oku-disko
 vina = "C0C76ATGLAH"      # #oku-vina
+
+# X API v2 poller (P-004): read-only GETs, video posts only, since_id. Runs ONLY when env X_BEARER_TOKEN is set for the
+# oku_world process (user env var; never in this file); without it the service logs "x source disabled: no token" once.
+[world.podnet_x]
+enabled = true
+accounts = ["AndrejBabis"]
+interval_min = 10
+hours = ["08:00", "22:00"]
+video_only = true
+
+# Optional free podnet source via the Perplexity CLI void-pplx-ask (on PATH of the oku_world process, or set command
+# to its full path). Output is untrusted data: only URLs of x.com/twitter.com/youtube.com/twitch.tv/kick.com that
+# match the configured handles/streams (X posts not older than max_age_h by their id) and short titles are kept.
+[world.podnet_pplx]
+enabled = true
+interval_min = 120
+hours = ["08:00", "22:00"]
+accounts = ["AndrejBabis"]
+streams = []                     # e.g. ["twitch:<channel>", "kick:<channel>", "youtube:@<channel>"] (Macinka/Xavera: UNKNOWN)
+mode = "fast"
+timeout_s = 150
+max_age_h = 48
+max_per_run = 3
