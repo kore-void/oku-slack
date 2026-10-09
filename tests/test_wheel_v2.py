@@ -303,3 +303,14 @@ def test_scope_refresh_applies_customize_live_and_reaction_handlers_registered()
     known = SA.refresh_scopes(c, known, scn); assert poster.customize and "reactions:read" in known
     src = (pathlib.Path(__file__).parents[1] / "oku_slack" / "wheel" / "slack_adapter.py").read_text(encoding="utf-8")
     assert '@app.event("reaction_added")' in src and '@app.event("reaction_removed")' in src
+
+def test_scene_lines_15_to_25_s_apart_not_spread_over_event():
+    cfg = config.load()
+    for ev in cfg["events"]:
+        if ev.get("script"): continue
+        at = [b["at"] for b in scenes.plan(cfg, {"key": ev["key"], "duration_s": ev["duration_s"]})]
+        gaps = [b - a for a, b in zip(at, at[1:])]
+        assert all(15 <= g <= 25 for g in gaps), (ev["key"], gaps)
+        assert at[-1] <= 2 + 7 * 25                                                # whole scene within ~3 min
+    assert scenes.schedule(5, 40)[-1] <= 40 * 0.85                                  # short event: squeezed to fit
+    assert scenes.schedule(1, 600) == [2.0]

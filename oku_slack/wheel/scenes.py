@@ -21,10 +21,14 @@ def clean(text, name=""):
     if first: t = re.sub(r"^\**\s*" + re.escape(first) + r"[^:\n]{0,25}:\**\s*", "", t)
     return t.strip()[:500]
 
-def schedule(n, duration, start=2.0, span=0.85):
+GAP_S = 20.0  # default gap between scene lines (players.toml settings.scene_gap_s); was ~100 s (spread over the event)
+
+def schedule(n, duration, start=2.0, gap=GAP_S, span=0.85):
+    """Beat offsets from live: a fixed short gap (~15-25 s) so the scene reads as a conversation; squeezed only
+    when the event is too short to fit (last beat by duration * span)."""
     if n <= 1: return [start]
-    end = max(start + n, duration * span)
-    return [round(start + i * (end - start) / (n - 1), 1) for i in range(n)]
+    gap = min(float(gap), max(1.0, (duration * span - start) / (n - 1)))
+    return [round(start + i * gap, 1) for i in range(n)]
 
 def plan(cfg, e):
     """Beats for an event: [{"at": s from live, "persona", "cue", "fallback", "text"(fixed)}]."""
@@ -38,7 +42,7 @@ def plan(cfg, e):
     sc = cfg.get("scenes", {}).get(e["key"]) or {}
     beats = list(sc.get("beats", []))[:8]
     return [{"at": at, "persona": b["persona"], "cue": b.get("cue", ""), "fallback": b.get("fallback", ""), "premise": sc.get("premise", "")}
-            for at, b in zip(schedule(len(beats), float(e["duration_s"])), beats)]
+            for at, b in zip(schedule(len(beats), float(e["duration_s"]), gap=(cfg.get("settings") or {}).get("scene_gap_s", GAP_S)), beats)]
 
 class SceneRunner:
     def __init__(self, eng, poster, gen=None, prompt_fn=None, clock=time.time, sleep=time.sleep, threaded=True):

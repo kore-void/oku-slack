@@ -1,5 +1,5 @@
 # Persona scenes acted out in the wheel channel when an event goes live (oku_slack/wheel/scenes.py).
-# [scenes.<event key>]: premise = situation for the LLM; beats = 4-8 turns spread over the event duration.
+# [scenes.<event key>]: premise = situation for the LLM; beats = 4-8 turns, settings.scene_gap_s (~20 s) apart.
 #   beat.persona = persona key from config.toml (babis, alenka, bourak, marty, peta, kalousek) or "monika" (wheel host)
 #   beat.cue = what this turn should do (LLM instruction, Czech); beat.fallback = templated line when the LLM is unavailable.
 # The first beat is posted top-level in the channel (short, punchy); the rest go into its thread.

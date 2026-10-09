@@ -29,6 +29,7 @@ catch_window_s = 10     # how long the "Chyť dotaci" button is visible
 quiz_window_s = 60
 scene_llm = true        # persona scenes via the oku_slack LLM path (false = templated lines only)
 scene_llm_timeout_s = 25
+scene_gap_s = 20        # seconds between persona scene lines (non-scripted scenes); keep ~15-25
 
 [players.kore]
 name = "Kore"
