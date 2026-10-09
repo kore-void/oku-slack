@@ -204,7 +204,7 @@ def fallback_text(eng):
 
 class Panel:
     def __init__(self, eng, client, channel, store, clock=time.time, min_interval=1.0, refresh_s=60.0, retry_s=120.0,
-                 base=IMG_BASE, card_renderer=None, backoff_cap_s=300.0, degrade_after=3, degrade_s=600.0, card_ready_s=3.0):
+                 base=IMG_BASE, card_renderer=None, backoff_cap_s=300.0, degrade_after=3, degrade_s=600.0, card_ready_s=3.0, max_reposts=2):
         self.eng, self.client, self.channel, self.store, self.clock, self.base = eng, client, channel, store, clock, base
         self.min_interval, self.refresh_s, self.retry_s = min_interval, refresh_s, retry_s
         self.backoff_cap_s, self.degrade_after, self.degrade_s, self.card_ready_s = backoff_cap_s, degrade_after, degrade_s, card_ready_s
@@ -212,6 +212,7 @@ class Panel:
         self.dirty, self.last, self.blocked_until, self.last_phase, self.last_error, self.updates = True, -1e18, 0.0, None, None, 0
         self.err_streak, self.errors, self.degraded_until, self.last_card_ref, self._pending_card_ref = 0, 0, 0.0, None, None
         self.cards, self.card_at, self.card_failed = {}, {}, set()
+        self.reposts, self.max_reposts = 0, max_reposts  # re-posts since the last successful update (anti channel spam)
         self.lock = threading.Lock()
 
     def request(self): self.dirty = True
@@ -293,11 +294,20 @@ class Panel:
             try: self.client.chat_update(channel=ch, ts=ts, text=fallback_text(self.eng), blocks=bl)
             except Exception as ex:
                 code = _err(ex)
-                if code in ("message_not_found", "cant_update_message"): self.store.kv_set("panel_ts", "")
+                if code in ("message_not_found", "cant_update_message"):
+                    # Panel gone -> re-post. But if even fresh panels cannot be updated, stop re-posting (each re-post is
+                    # a new channel message) and only retry the update at the backoff cap; /kolo re-posts manually.
+                    self.reposts += 1
+                    if self.reposts <= self.max_reposts: self.store.kv_set("panel_ts", "")
+                    elif self.reposts == self.max_reposts + 1:
+                        log.warning("panel %s right after %d re-post(s); not re-posting again until an update succeeds", code, self.max_reposts)
                 if code == "invalid_blocks" and e and e["id"] in self.cards and self._pending_card_ref:  # slack_file refused -> static card
                     self.card_failed.add(e["id"]); self.cards.pop(e["id"], None)
-                self.dirty = True; return self._fail("update", ex)
+                self.dirty = True; r = self._fail("update", ex)
+                if self.reposts > self.max_reposts: self.blocked_until = max(self.blocked_until, self.clock() + self.backoff_cap_s)
+                return r
             self.dirty, self.last, self.last_phase, self.last_card_ref = False, now, ph, self._pending_card_ref
+            self.reposts = 0
             self._ok(); self.updates += 1; return True
 
     def run(self, period=0.25):

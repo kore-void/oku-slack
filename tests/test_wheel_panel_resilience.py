@@ -74,3 +74,36 @@ def test_result_card_static_first_then_slack_file_when_ready():
     assert sl.names().count("upload") == 1
     sl.fail["update"] = Err("invalid_blocks"); clk.adv(2); p.request(); p.flush()   # slack_file refused -> static card
     sl.fail.clear(); clk.adv(5); p.request(); assert p.flush() and "image_url" in img(sl.calls[-1])[0]
+
+# ---------------- idle panel: no hard-error retry storm ----------------
+def _idle_run(p, clk, hours=2.0, period=0.25):
+    for _ in range(int(hours * 3600 / period)): clk.adv(period); p.flush()
+
+def test_idle_panel_refreshes_only_every_refresh_s():
+    e, st, clk = mk(); sl = FakeSlack(); p = panel.Panel(e, sl, "C1", st, clock=clk)
+    assert p.flush() and e.active_event() is None
+    _idle_run(p, clk, hours=2)                                                     # panel loop cadence, nothing happens
+    n = sl.names().count("update"); assert 100 <= n <= 125, n                     # ~1 per refresh_s (60 s), not 4/s
+    assert sl.names().count("post") == 1
+
+def test_idle_panel_hard_error_backs_off_no_storm(caplog):
+    e, st, clk = mk(); sl = FakeSlack(); p = panel.Panel(e, sl, "C1", st, clock=clk); p.flush()
+    sl.fail["update"] = Err("internal_error")                                     # hard (non-soft) error while idle
+    caplog.set_level(logging.WARNING, logger="oku_wheel.panel")
+    _idle_run(p, clk, hours=2)
+    n = sl.names().count("update"); assert n <= 40, n                              # 28 800 loop ticks -> capped backoff
+    assert p.blocked_until - clk() <= p.backoff_cap_s and "retry in 300s" in caplog.text
+    assert len([r for r in caplog.records if "panel update failed" in r.getMessage()]) == n
+    sl.fail.clear(); clk.adv(p.backoff_cap_s + 1); assert p.flush() and p.err_streak == 0
+
+def test_idle_panel_repost_failure_backs_off_no_storm():
+    e, st, clk = mk(); sl = FakeSlack(); p = panel.Panel(e, sl, "C1", st, clock=clk)
+    sl.fail["post"] = Err("fatal_error")                                          # no panel yet and posting keeps failing
+    _idle_run(p, clk, hours=2)
+    assert sl.names().count("post") <= 40 and st.kv_get("panel_ts") in (None, "")
+    sl.fail["update"] = Err("message_not_found"); sl.fail.pop("post")              # panel deleted -> one re-post, not a loop
+    clk.adv(p.backoff_cap_s + 1); assert p.flush(); before = len(sl.calls)
+    _idle_run(p, clk, hours=0.5)
+    assert sl.names()[before:].count("post") <= 2, sl.names()[before:]           # was ~30 new channel messages / 30 min
+    assert sl.names()[before:].count("update") <= 12
+    sl.fail.clear(); clk.adv(p.backoff_cap_s + 1); p.request(); assert p.flush() and p.reposts == 0  # recovers by itself
