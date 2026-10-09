@@ -32,7 +32,7 @@ def test_derive_effects_and_selectors():
     out = consequences.derive(ev(5, "wheel.expired", key="porada", host="babis", missing=["kore", "icik"]), c)
     assert [o["payload"]["rule"] for o in out] == ["wheel_expired_kampan"]
     o = out[0]; assert o["causal_parents"] == ["we_0005"] and o["dedupe_key"] == "consequence:wheel_expired_kampan:we_0005"
-    assert o["payload"]["effects"] == [{"resource": "kampan", "delta": -5}, {"relation": ["babis", "kore"], "delta": -1},
+    assert o["payload"]["effects"] == [{"resource": "kampan", "delta": -3}, {"relation": ["babis", "kore"], "delta": -1},
                                        {"relation": ["babis", "icik"], "delta": -1}]
     ch = consequences.derive(ev(6, "chatter.dry_run", storylet="KALOUSEK_VINA", participants=["kalousek", "babis", "alenka"]), c)
     rules = {o["payload"]["rule"]: o["payload"] for o in ch}
@@ -55,7 +55,7 @@ def test_engine_writes_rows_once_and_projection_replays(tmp_path):
     assert sorted(a["payload"]["rule"] for a in applied) == ["porada_catering_hranolky", "porada_held_dotace", "wheel_expired_kampan"]
     assert all(a["source"] == "consequence" and a["causal_parents"] for a in applied)
     s = svc.world.state()
-    assert s["resources"]["kampan"] == before["kampan"] - 5 and s["resources"]["dotace"] == before["dotace"] + 250
+    assert s["resources"]["kampan"] == before["kampan"] - 3 and s["resources"]["dotace"] == before["dotace"] + 250
     assert s["resources"]["hranolky"] == before["hranolky"] - 10 and s["relations"]["babis"]["kore"] == -1
     assert s["consequences"]["applied"] == 3 and svc.health()["consequences"]["applied"] == 3
     assert json.loads(json.dumps(s)) == json.loads(json.dumps(svc.world.rebuild())) == json.loads(json.dumps(wstate.project(d.events(), svc.ctx)))

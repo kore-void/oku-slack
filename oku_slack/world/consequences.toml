@@ -31,7 +31,7 @@ hranolky_low = 60
 id = "wheel_expired_kampan"
 on = ["wheel.expired"]
 resource = "kampan"
-delta = -5
+delta = -3
 relation = { from = "host", to = "missing", delta = -1 }
 
 [[rule]]
