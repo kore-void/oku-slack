@@ -3,8 +3,14 @@ Kore's rule: the first beat is a short punchy top-level line in the channel; the
 Lines are generated with the SAME machinery as the persona bridge (oku_slack.core.build_prompt + core.generate,
 i.e. the persona prompt files + Gemini keys shared with Umbra), one call per beat, just in time, with the scene
 transcript so far and any running charged-command sequence. LLM unavailable/slow/empty -> templated fallback.
-The legendary Titanic scene keeps its fixed script (no LLM). State persists in kv scene:<event_id> (resume after restart)."""
+The legendary Titanic scene keeps its fixed script (no LLM). State persists in kv scene:<event_id> (resume after restart).
+Porada (scenes.toml meeting = true, settings.meeting_handoff): only the opener is scripted. It becomes the thread root and
+the wheel asks the persona bridge (oku_slack.handoff, local files) to run a REAL porada (oku_slack.meeting) in that thread.
+The remaining scripted beats are dropped once the bridge acks 'started'; they are only a fallback when the bridge answers
+dup/stale/error or does not answer within settings.meeting_handoff_timeout_s (~30 s). Live scene threads are published
+to logs/outbox/live_threads.json so the bridge can route plain human replies there."""
 import json, logging, re, threading, time
+from .. import handoff
 
 log = logging.getLogger("oku_wheel.scenes")
 SCENE_RULES = ("Hraješ krátkou scénku ve Slack kanálu #oku-porada; právě běží událost z kola štěstí OKÚ. "
@@ -99,7 +105,8 @@ class SceneRunner:
         with self.lock:
             st = self.state(e["id"])
             if st is None:
-                st = {"event_id": e["id"], "root_ts": None, "beats": plan(self.eng.cfg, e), "done": False}
+                st = {"event_id": e["id"], "root_ts": None, "beats": plan(self.eng.cfg, e), "done": False,
+                      "handoff": {"state": "pending"} if self.wants_meeting(e) else None}
                 self._save(st)
             if st["done"] or e["id"] in self.running: return st
             self.running.add(e["id"])
@@ -115,25 +122,93 @@ class SceneRunner:
         finally: self.running.discard(eid)
 
     def step(self, eid):
-        """Post every due beat. Returns False when the scene is over (all posted or event not live)."""
+        """Post every due beat. Returns False when the scene is over (all posted/handed off or event not live)."""
         st = self.state(eid)
         if not st or st["done"]: return False
         e = next((x for x in self.eng.store.events() if x["id"] == eid), None)
         if not e or e["state"] != "live":
-            st["done"] = True; self._save(st); return False
+            st["done"] = True; self._save(st); self._unpublish(st); return False
         now = self.clock() - e["live_at"]
+        ho = st.get("handoff")
+        if ho and ho["state"] == "requested": self._check_handoff(st, e, now)
+        if st["done"]: return False
         for b in st["beats"]:
-            if b.get("posted") or b["at"] > now: continue
+            if b.get("posted") or b.get("skipped") or b["at"] > now: continue
+            if ho and ho["state"] in ("pending", "requested") and st["root_ts"]: break  # porada: hold beats for the bridge
             transcript = [(self._name(x["persona"]), x["said"]) for x in st["beats"] if x.get("said")]
             top = st["root_ts"] is None
             text, how = (b["text"], "script") if b.get("text") else self.line(b["persona"], b["cue"], b["fallback"], b.get("premise", ""), transcript, top)
             ts, via = self.poster.post(b["persona"], text, thread_ts=st["root_ts"])
             b.update(posted=True, said=text, ts=ts, how=how, via=via)
-            if top and ts: st["root_ts"] = ts
+            if top and ts:
+                st["root_ts"] = ts
+                if ho and ho["state"] == "pending": self._request_meeting(st, e)
+                else: self._publish(st, e, skit_running=True)
             self._save(st)
-        if all(b.get("posted") for b in st["beats"]):
-            st["done"] = True; self._save(st); return False
+        if all(b.get("posted") or b.get("skipped") for b in st["beats"]):
+            st["done"] = True; self._save(st); self._publish(st, e, skit_running=False); return False
         return True
+
+    # ---------- porada -> real bot meeting (oku_slack.handoff) ----------
+    def wants_meeting(self, e):
+        if e.get("script") or not self.eng.s.get("meeting_handoff", True): return False
+        return bool((self.eng.cfg.get("scenes", {}).get(e.get("key")) or {}).get("meeting"))
+
+    def _request_meeting(self, st, e):
+        ho = st["handoff"]; sc = self.eng.cfg.get("scenes", {}).get(e["key"]) or {}
+        try:
+            req = handoff.request_meeting(self.poster.channel, st["root_ts"], event_id=e["id"], topic=sc.get("premise") or e.get("title", ""),
+                                          host=e.get("host") or "babis", clock=self.clock)
+            ho.update(state="requested", id=req["id"], at=self.clock())
+            log.info("porada %s: real meeting requested in thread %s (req %s)", e["id"], st["root_ts"], req["id"])
+            self._publish(st, e, skit_running=False)
+        except Exception as ex:
+            log.warning("porada %s: meeting request failed: %s (scripted fallback)", e["id"], type(ex).__name__)
+            self._fallback(st, e, self.clock() - e["live_at"], "request_failed")
+
+    def _check_handoff(self, st, e, now):
+        ho = st["handoff"]
+        try: a = handoff.ack_for(ho["id"])
+        except Exception as ex: log.warning("porada ack read failed: %s", type(ex).__name__); a = None
+        if a and a.get("status") == "started":
+            ho.update(state="meeting", acked_at=self.clock())
+            for b in st["beats"]:
+                if not b.get("posted"): b["skipped"] = True
+            st["done"] = True; self._save(st); self._publish(st, e, skit_running=False)
+            log.info("porada %s: bridge runs the real meeting in %s; scripted beats dropped", e["id"], st["root_ts"])
+        elif a: self._fallback(st, e, now, a.get("status") or "rejected")
+        elif self.clock() - float(ho.get("at") or 0) > float(self.eng.s.get("meeting_handoff_timeout_s", 30)):
+            self._fallback(st, e, now, "timeout")
+
+    def _fallback(self, st, e, now, why):
+        """Bridge did not take it: play the remaining scripted beats from now, scene_gap_s apart."""
+        st["handoff"].update(state="fallback", reason=why)
+        gap = float(self.eng.s.get("scene_gap_s", GAP_S))
+        rest = [b for b in st["beats"] if not b.get("posted")]
+        for i, b in enumerate(rest): b["at"] = round(now + 1 + i * gap, 1)
+        self._save(st); self._publish(st, e, skit_running=True)
+        log.info("porada %s: no real meeting (%s); scripted fallback, %d beat(s)", e["id"], why, len(rest))
+
+    def _publish(self, st, e, skit_running):
+        if not st.get("root_ts"): return
+        try:
+            live = handoff.read_live_threads(clock=self.clock)
+            live[st["root_ts"]] = {"channel": self.poster.channel, "event_id": e["id"], "key": e.get("key"), "host": e.get("host") or "babis",
+                                   "until": e.get("end_at") or (self.clock() + float(e.get("duration_s") or 600)), "skit_running": bool(skit_running)}
+            handoff.write_live_threads(live, clock=self.clock)
+        except Exception as ex: log.warning("live threads write failed: %s", type(ex).__name__)
+
+    def _unpublish(self, st):
+        if not st.get("root_ts"): return
+        try:
+            live = handoff.read_live_threads(clock=self.clock)
+            if live.pop(st["root_ts"], None) is not None: handoff.write_live_threads(live, clock=self.clock)
+        except Exception as ex: log.warning("live threads write failed: %s", type(ex).__name__)
+
+    def end(self, e):
+        """Event done/vetoed/expired: the thread stops being a live wheel thread for the bridge."""
+        st = self.state(e["id"]) if e and e.get("id") else None
+        if st: self._unpublish(st)
 
     def _name(self, k):
         from .personas import NAMES

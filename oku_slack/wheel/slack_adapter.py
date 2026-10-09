@@ -172,6 +172,7 @@ def make_poster(eng, client, channel, sync=None, pnl=None, scenes=None):
             try:
                 if kind == "live": scenes.start(obj)
                 elif kind == "persona_line": scenes.interject(obj)
+                elif kind in ("done", "vetoed", "expired") and hasattr(scenes, "end"): scenes.end(obj)
             except Exception as e: log.warning("scene %s failed: %s", kind, type(e).__name__)
         if kind != "alarm" or not channel: return
         mentions = " ".join(panel.who(eng, k) for k in eng.cfg["players"])

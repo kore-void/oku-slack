@@ -8,6 +8,9 @@
 
 [scenes.porada]
 premise = "Mimořádná porada OKÚ. Andrej Babiš předsedá a chce slyšet čísla a zisk. Ostatní se vymlouvají."
+# meeting = true: only the first beat is posted (thread root); the persona bridge then runs a real porada there.
+# The other beats are a fallback if the bridge does not ack within settings.meeting_handoff_timeout_s.
+meeting = true
 beats = [
   { persona = "babis", cue = "Zahaj poradu jednou úderně krátkou větou a chtěj čísla.", fallback = "Porada! Hned! Chci vidět čísla, zisk, všechno!" },
   { persona = "babis", cue = "Vyvolej Alenku a chtěj od ní čísla za kantýnu.", fallback = "Alenko, kolik vydělala kantýna? Přesně, na korunu." },

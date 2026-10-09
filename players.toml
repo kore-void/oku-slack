@@ -30,6 +30,8 @@ quiz_window_s = 60
 scene_llm = true        # persona scenes via the oku_slack LLM path (false = templated lines only)
 scene_llm_timeout_s = 25
 scene_gap_s = 20        # seconds between persona scene lines (non-scripted scenes); keep ~15-25
+meeting_handoff = true  # porada event: opener only, then the persona bridge runs a REAL bot porada in that thread (logs/outbox)
+meeting_handoff_timeout_s = 30  # no ack from the bridge by then -> scripted porada beats as fallback
 
 [players.kore]
 name = "Kore"

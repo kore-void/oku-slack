@@ -182,7 +182,7 @@ def test_scene_plan_4_to_8_beats_spread_over_event():
     assert scenes.plan(cfg, {"key": "porada", "duration_s": 600})[0]["persona"] == "babis"
 
 def test_scene_llm_first_line_top_level_then_thread_and_fallbacks():
-    e, clk = mk(); ev = go_live(e, clk, "porada"); calls = []
+    e, clk = mk(meeting_handoff=False); ev = go_live(e, clk, "porada"); calls = []   # all 6 scripted beats (hand-off off)
     def gen(system, hist):
         calls.append((system, hist))
         if len(calls) == 2: raise RuntimeError("gemini exhausted")
