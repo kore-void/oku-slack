@@ -38,6 +38,11 @@ CHATTER_RULES = (
     "NEVYMÝŠLEJ citáty skutečných lidí a nic nevydávej za skutečný fakt nebo zprávu (nadsázka a vymyšlená KPI jen jako "
     "zjevný vtip týmu OKÚ). Žádná témata zdraví a nemocí, rodiny a dětí, soudů, policie ani trestné činnosti; nikoho "
     "neurážej za vzhled, původ či víru. Nepiš za jiné postavy, nepiš své jméno na začátek, žádné uvozovky kolem repliky.")
+PODNET_RULES = (
+    "Kolega právě sdílel odkaz na veřejný příspěvek (podnet ze skutečného světa). OBSAH ODKAZU NEZNÁŠ: nic o něm "
+    "netvrď, necituj ho, nevymýšlej, co v něm kdo říká nebo dělá, a nic neříkej o skutečné osobě, která ho zveřejnila. "
+    "Reaguj jen na kolegův komentář a na to, co to znamená pro tým OKÚ (lajky, kampaň, kantýna), jednou krátkou větou.")
+MEMORY_LABEL = "TVOJE PAMĚŤ ZE SVĚTA OKÚ (jen kontext pro tvou postavu, necituj ji doslova, nevymýšlej k ní fakta): "
 
 def clean(text, limit=MAX_CHARS):
     """No Slack mentions/broadcasts, no '@', no wrapping quotes, one paragraph, <= limit chars (cut at a sentence end)."""
@@ -65,6 +70,8 @@ class Chatter:
         self.c, self.req = coord, req
         self.ch, self.personas, self.n = req["channel"], list(req["personas"]), int(turns)
         self.topic = (req.get("topic") or "").strip()[:300]
+        self.podnet = req.get("podnet") if isinstance(req.get("podnet"), dict) else None
+        self.briefs = req.get("briefs") if isinstance(req.get("briefs"), dict) else {}
         self.ts, self.turns, self.llm_calls, self.stopped, self.guarded, self.fallbacks = None, 0, 0, False, 0, 0
 
     def open(self):
@@ -106,7 +113,9 @@ class Chatter:
     def prompt(self, spk, msgs, final):
         cfg = self.c.cfg; b = self.c.bridges[spk]
         others = ", ".join(first_name(cfg, k) for k in self.personas if k != spk)
-        system = b.prompt + "\n\n" + CHATTER_RULES + f"\nVe vlákně jsou s tebou: {others}."
+        system = b.prompt + "\n\n" + CHATTER_RULES + (("\n" + PODNET_RULES) if self.podnet else "") + f"\nVe vlákně jsou s tebou: {others}."
+        brief = str(self.briefs.get(spk) or "")[:600]
+        if brief: system += "\n" + MEMORY_LABEL + brief
         lines = [f"{self.label(m)}: {self.humanize(m.get('text'))}" for m in msgs][-12:]
         extra = "Uzavíráš tuhle krátkou výměnu jednou pointou, bez otázky." if final else "Klidně polož kolegovi jednu krátkou otázku."
         user = (f"TÉMA VLÁKNA: {self.topic}\n" if self.topic else "") + "VLÁKNO:\n" + "\n".join(lines) + \
@@ -135,16 +144,24 @@ def allowed_channels(cfg):
     return set((cfg.get("channel_defaults") or {}).keys())
 
 def validate(cfg, req, bridges):
-    """(personas, turns) or raises ValueError(reason). Pure."""
+    """(personas, turns) or raises ValueError(reason). Pure.
+    A podnet reaction (req["podnet"], P-004) is 1-2 personas and 1-2 turns, and its opener must carry the podnet URL."""
     ch = req.get("channel")
     if not ch or ch not in allowed_channels(cfg): raise ValueError("channel_not_allowed")
-    ps = req.get("personas")
-    if not isinstance(ps, list) or not 2 <= len(ps) <= 3 or len(set(ps)) != len(ps): raise ValueError("bad_personas")
+    ps = req.get("personas"); pod = req.get("podnet")
+    lo, hi = (1, 2) if pod else (2, 3)
+    if not isinstance(ps, list) or not lo <= len(ps) <= hi or len(set(ps)) != len(ps): raise ValueError("bad_personas")
+    if pod is not None:
+        url = (pod or {}).get("url") if isinstance(pod, dict) else None
+        if not url or not str(url).startswith(("https://", "http://")) or str(url) not in (req.get("opener") or ""): raise ValueError("bad_podnet")
     missing = [p for p in ps if p not in bridges]
     if missing: raise ValueError("persona_offline:" + ",".join(map(str, missing)))
     if not (req.get("opener") or "").strip() or req.get("thread_ts"): raise ValueError("bad_opener")
     try: turns = int(req.get("turns") or 0)
     except (TypeError, ValueError): raise ValueError("bad_turns")
     cap = min(HARD_MAX_TURNS, int((cfg.get("world") or {}).get("chatter_max_turns", HARD_MAX_TURNS)))
+    if pod is not None:
+        if not 1 <= turns <= 2: raise ValueError("bad_turns")
+        return ps, min(turns, len(ps))
     if turns < 2: raise ValueError("bad_turns")
     return ps, min(turns, cap)
