@@ -1,6 +1,6 @@
 """Room server (aiohttp): authoritative tick loop + WebSocket hub + static room + optional Slack adapter.
 Clients only render server state; they get `now` in each message to compute clock offset."""
-import asyncio, collections, json, logging, os, pathlib, time
+import asyncio, collections, json, logging, logging.handlers, os, pathlib, subprocess, time
 from aiohttp import web, WSMsgType
 from . import config, engine, render, store
 from ..world import log as world_log
@@ -33,6 +33,34 @@ def origin_ok(origin, allowed=None):
     for a in allowed or allowed_origins():
         if o == a or (a in ("http://127.0.0.1", "http://localhost") and o.startswith(a + ":")): return True
     return False
+
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+
+def setup_logging(logs_dir, level=logging.INFO, max_bytes=5_000_000, backups=5):
+    """Timestamped log lines to stderr (Heimdall captures it) AND a rotating logs/oku_wheel.log. Idempotent."""
+    logs_dir = pathlib.Path(logs_dir); logs_dir.mkdir(parents=True, exist_ok=True)
+    root = logging.getLogger(); root.setLevel(level); fmt = logging.Formatter(LOG_FORMAT)
+    path = str(logs_dir / "oku_wheel.log")
+    if not any(getattr(h, "baseFilename", None) == os.path.abspath(path) for h in root.handlers):
+        fh = logging.handlers.RotatingFileHandler(path, maxBytes=max_bytes, backupCount=backups, encoding="utf-8")
+        fh.setFormatter(fmt); root.addHandler(fh)
+    if not any(type(h) is logging.StreamHandler for h in root.handlers):
+        sh = logging.StreamHandler(); sh.setFormatter(fmt); root.addHandler(sh)
+    return path
+
+def git_commit(root=None):
+    """Short sha of the running checkout: env OKU_COMMIT, else `git rev-parse`, else .git/HEAD, else 'unknown'."""
+    if os.environ.get("OKU_COMMIT"): return os.environ["OKU_COMMIT"][:40]
+    root = pathlib.Path(root or config.ROOT)
+    try:
+        r = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=root, capture_output=True, text=True, timeout=5)
+        if r.returncode == 0 and r.stdout.strip(): return r.stdout.strip()
+    except (OSError, subprocess.SubprocessError): pass
+    try:
+        head = (root / ".git" / "HEAD").read_text(encoding="utf-8").strip()
+        if head.startswith("ref: "): head = (root / ".git" / head[5:]).read_text(encoding="utf-8").strip()
+        return head[:7] if head else "unknown"
+    except OSError: return "unknown"
 
 class RateLimit:
     """Sliding window per connection: at most `n` messages per `window` seconds."""
@@ -90,9 +118,9 @@ class Hub:
     def _notify(self, kind, obj):
         if self.notify: asyncio.get_running_loop().run_in_executor(None, self.notify, kind, obj)
 
-def make_app(eng, notify=None, period=0.5, run_loop=True):
+def make_app(eng, notify=None, period=0.5, run_loop=True, commit=None):
     hub = Hub(eng, notify)
-    app = web.Application(); app["hub"] = hub
+    app = web.Application(); app["hub"] = hub; app["commit"] = commit or "unknown"
 
     async def ws_handler(req):
         if not origin_ok(req.headers.get("Origin")):
@@ -119,7 +147,8 @@ def make_app(eng, notify=None, period=0.5, run_loop=True):
         hub.clients.pop(ws, None)
         return ws
 
-    async def state(req): return web.json_response(eng.snapshot())  # public on purpose (room feed, D12)
+    async def state(req):  # public on purpose (room feed, D12); `commit` = running git sha (short)
+        return web.json_response(dict(eng.snapshot(), commit=app["commit"]))
     async def world(req):  # loopback-only (D12): never through the tunnel
         if not loopback_only(req): return web.Response(status=403, text="forbidden")
         snap = eng.world.snapshot(korun={k: eng.eco.balance(k) for k in eng.cfg["players"]})
@@ -153,7 +182,9 @@ def make_app(eng, notify=None, period=0.5, run_loop=True):
     return app
 
 def main():
-    logging.basicConfig(level=logging.INFO)
+    path = setup_logging(config.ROOT / "logs")
+    commit = git_commit()
+    log.info("oku_wheel starting: commit=%s log=%s", commit, path)
     cfg = config.load()
     db = pathlib.Path(os.environ.get("OKU_WHEEL_DB") or config.ROOT / "logs" / "wheel.sqlite3"); db.parent.mkdir(exist_ok=True)
     eng = engine.Engine(cfg, store.Store(db), world_jsonl=os.environ.get("OKU_WORLD_JSONL") or db.parent / "world.jsonl")
@@ -163,6 +194,6 @@ def main():
         from . import slack_adapter
         notify = slack_adapter.start(eng)  # Socket Mode with the dedicated OKÚ Kolo app tokens; registers /kolo
     host, port = os.environ.get("OKU_WHEEL_HOST", "127.0.0.1"), int(os.environ.get("OKU_WHEEL_PORT", "8797"))
-    web.run_app(make_app(eng, notify), host=host, port=port)
+    web.run_app(make_app(eng, notify, commit=commit), host=host, port=port)
 
 if __name__ == "__main__": main()
