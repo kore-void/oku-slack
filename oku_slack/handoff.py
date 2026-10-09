@@ -56,6 +56,19 @@ def request_world_meeting(channel, topic, opener, storylet="PORADA", slot=None, 
                               "event_id": None, "topic": (topic or "")[:500], "host": "babis", "source": "world",
                               "opener": (opener or "")[:600], "storylet": storylet, "slot": slot}, outbox_dir)
 
+def request_chatter(channel, personas, topic, opener, turns, storylet=None, slot=None, outbox_dir=None, clock=time.time):
+    """oku_world director (P-005): ask the bridge for a short persona exchange (<= 4 turns) in a persona channel.
+    kind=chatter + source=world:chatter + no thread_ts: a bridge without chatter support answers 'rejected' (it only
+    starts a thread-less porada for source=world), so a premature live request is harmless."""
+    return _append(REQUESTS, {"id": uuid.uuid4().hex[:12], "at": clock(), "kind": "chatter", "source": "world:chatter",
+                              "channel": channel, "thread_ts": None, "event_id": None, "personas": list(personas)[:3],
+                              "topic": (topic or "")[:300], "opener": (opener or "")[:400], "turns": int(turns),
+                              "storylet": storylet, "slot": slot}, outbox_dir)
+
+def acks_for(req_id, outbox_dir=None):
+    """All acks for a request id, oldest first (a chatter gets 'started' and later 'done')."""
+    return [a for a in _read(ACKS, 0, outbox_dir)[0] if a.get("id") == req_id]
+
 def ack_for(req_id, outbox_dir=None):
     """Latest ack for a request id, or None."""
     acks, _ = _read(ACKS, 0, outbox_dir)

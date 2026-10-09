@@ -171,6 +171,7 @@ class Coordinator:
         self.seen = OrderedDict(); self.lock = threading.Lock(); self.max_seen = max_seen
         self.active = {}  # (ch, thread_ts) -> Meeting
         self.reporter = None  # usage.Reporter for end-of-meeting summary DM
+        self.chatters = {}    # channel -> chatter.Chatter (autonomous world chatter, P-005); never a meeting thread
 
     def add(self, key, bridge):
         self.bridges[key] = bridge; self.uid_map[key] = bridge.bot; self.uid_to_persona[bridge.bot] = key
@@ -230,15 +231,17 @@ class Coordinator:
         return host if host in self.bridges else ("babis" if "babis" in self.bridges else next(iter(self.bridges)))
 
     def busy(self, ch):
-        """A meeting is running anywhere in this channel (which includes the given thread)."""
-        return any(c == ch for c, _ in self.active)
+        """A meeting or a world chatter thread is running anywhere in this channel (which includes the given thread)."""
+        return any(c == ch for c, _ in self.active) or ch in self.chatters
 
     def start_external(self, req):
         """File hand-off (oku_slack.handoff): real porada in req's channel/thread. Returns started | dup | rejected.
         Wheel requests carry thread_ts (the wheel posted the opener). World requests (source=world, the oku_world
         scheduler) carry no thread: the chair (Babiš) posts `opener` top-level first and the porada runs in its thread;
         then the return value is ("started", {"thread_ts": ts}) so the ack tells the world where it runs.
-        No double porada: refused while any meeting runs in that channel or thread."""
+        No double porada: refused while any meeting runs in that channel or thread.
+        kind=chatter (oku_world director, P-005) goes to start_chatter: a bounded persona exchange, not a porada."""
+        if req.get("kind") == "chatter": return self.start_chatter(req)
         ch, ts = req.get("channel"), req.get("thread_ts")
         world = req.get("source") == "world"
         if not (ch and self.bridges) or not (ts or (world and (req.get("opener") or "").strip())): return "rejected"
@@ -257,6 +260,45 @@ class Coordinator:
                       req.get("slot") if world else req.get("event_id"), ch, ts, ",".join(parts))
         self.start(m)
         return ("started", {"thread_ts": ts}) if world else "started"
+
+    def start_chatter(self, req, sleep=None):
+        """World chatter request -> ("started", {thread_ts, turns, personas}) | ("rejected", {reason}) | "dup" | "error".
+        The first persona posts the opener top-level; a thread then runs <= 4 turns (chatter.Chatter) and a second ack
+        "done" reports turns + LLM calls. Refused while a meeting/chatter runs in the channel or a wheel skit is live."""
+        from . import chatter, handoff
+        try: personas, turns = chatter.validate(self.cfg, req, self.bridges)
+        except ValueError as e:
+            core.log.info("world chatter rejected ch=%s: %s", req.get("channel"), e); return ("rejected", {"reason": str(e)})
+        ch = req["channel"]
+        if any(v.get("skit_running") for v in self.live_threads().values()):
+            core.log.info("world chatter refused ch=%s: wheel skit live", ch); return ("rejected", {"reason": "wheel_live"})
+        with self.lock:
+            if self.busy(ch): core.log.info("world chatter refused ch=%s: channel busy", ch); return "dup"
+            ch_obj = chatter.Chatter(self, dict(req, personas=personas), turns)
+            try: ts = ch_obj.open()
+            except Exception as e:
+                core.log.error("world chatter opener failed ch=%s: %s", ch, type(e).__name__); return "error"
+            self.chatters[ch] = ch_obj
+        core.log.info("chatter start (%s %s) ch=%s ts=%s personas=%s turns=%d", req.get("storylet"), req.get("slot"), ch, ts,
+                      ",".join(personas), turns)
+        def go():
+            status = "done"
+            try: ch_obj.run(sleep=sleep)
+            except Exception as e: core.log.error("chatter crashed: %s", type(e).__name__); status = "error"
+            finally:
+                with self.lock: self.chatters.pop(ch, None)
+                try: handoff.ack(req.get("id"), "stopped" if ch_obj.stopped and status == "done" else status, thread_ts=ts,
+                                 turns=ch_obj.turns, llm_calls=ch_obj.llm_calls, guarded=ch_obj.guarded, fallbacks=ch_obj.fallbacks)
+                except Exception as e: core.log.warning("chatter done ack failed: %s", type(e).__name__)
+                core.log.info("chatter end ch=%s ts=%s turns=%d llm_calls=%d", ch, ts, ch_obj.turns, ch_obj.llm_calls)
+        self.chatter_thread = threading.Thread(target=go, daemon=True, name="chatter"); self.chatter_thread.start()
+        return ("started", {"thread_ts": ts, "turns": turns, "personas": personas})
+
+    def live_threads(self):
+        try:
+            from . import handoff
+            return handoff.read_live_threads()
+        except Exception as e: core.log.warning("live threads unreadable: %s", type(e).__name__); return {}
 
     def _trim(self):
         while len(self.seen) > self.max_seen: self.seen.popitem(last=False)
