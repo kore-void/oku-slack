@@ -1,0 +1,128 @@
+# Wheel of fortune: players + events. No secrets here.
+# room_key: per-player key used by the web room (?p=<id>&k=<room_key>). Change before exposing the room beyond localhost.
+
+[settings]
+cooldown_s = 1800        # charged command: once per 30 min per player
+sequence_s = 120         # charged command sequence length
+alarm_before_s = 300     # alarm 5 min before event start
+lead_s = 600             # spin -> event start (default 10 min)
+confirm_wait_s = 60      # grace after start: quorum not reached by start_at + this -> event expires
+confirm_quorum = 1       # D1: confirmations needed to go live (1 = any one player; 0 = all players). Others may still join
+hold_min_s = 2.0         # press-and-hold confirmation threshold
+spin_ms = 6000           # wheel spin animation length in the room
+slack_channel = "C0C6W8E6NP9"  # oku-porada: alarms/results
+allow_force = false     # D10: forced spins off in production (room hides "Vynutit legendu"); tests enable it themselves
+nag_before_s = 120      # host nags missing players this long before start
+# --- v2: OKÚ korun (points), bets, charged-command effects, live show ---
+start_points = 1000     # every player starts with this many OKÚ korun (balance = start + ledger)
+bet_window_s = 30       # Točit opens a betting window this long; 0 = spin immediately (no bets)
+min_bet = 10
+house_edge = 0.1        # odds = total_weight / segment_weight * (1 - house_edge); legendary pays big
+min_odds = 1.5
+steal_pct = 10          # steal_points effect: % of the victim's balance
+shield_s = 1800         # shield effect duration
+points_confirm = 50     # confirming before the start time
+points_vote = 10        # first vote in a live poll
+points_catch = 150      # "Chyť dotaci" minigame winner
+points_quiz = 100       # correct quiz answer
+catch_window_s = 10     # how long the "Chyť dotaci" button is visible
+quiz_window_s = 60
+scene_llm = true        # persona scenes via the oku_slack LLM path (false = templated lines only)
+scene_llm_timeout_s = 25
+scene_gap_s = 20        # seconds between persona scene lines (non-scripted scenes); keep ~15-25
+meeting_handoff = true  # porada event: opener only, then the persona bridge runs a REAL bot porada in that thread (logs/outbox)
+meeting_handoff_timeout_s = 30  # no ack from the bridge by then -> scripted porada beats as fallback
+
+[players.kore]
+name = "Kore"
+slack_id = "U0C6XAN3EG3"
+room_key = "kore-local"
+command = "Sorry jako"        # Kore's charged command label
+# Effects (oku_slack/wheel/effects.py REGISTRY): veto_respin, steal_points, double_bet, persona_interrupt, shield.
+command_effects = ["veto_respin", "persona_interrupt"]   # veto the current result + respin; Babiš interrupts
+command_persona = "babis"
+
+[players.icik]
+name = "ICIK"
+slack_id = "U0C75FSEK2M"
+room_key = "icik-local"
+command = "Kalousek za to může"
+command_effects = ["steal_points"]   # steals steal_pct % of the leader's points; Kalousek posts a one-liner
+command_persona = "kalousek"
+
+[[events]]
+key = "porada"
+title = "Mimořádná porada OKÚ"
+host = "babis"
+weight = 3
+duration_s = 600
+color = "#1d4f91"
+music_url = ""   # empty = built-in synthesized cue (no licensing issue)
+
+[[events]]
+key = "tiskovka"
+title = "Tisková konference"
+host = "babis"
+weight = 2
+duration_s = 480
+color = "#c0392b"
+music_url = ""
+
+[[events]]
+key = "kantyna"
+title = "Alenka otevírá kantýnu"
+host = "alenka"
+weight = 2
+duration_s = 420
+color = "#f39c12"
+music_url = ""
+
+[[events]]
+key = "disko"
+title = "Peťa Maci disko"
+host = "peta"
+weight = 1
+duration_s = 600
+color = "#8e44ad"
+music_url = ""
+
+[[events]]
+key = "socky"
+title = "Marty: génius sociálních sítí"
+host = "marty"
+weight = 2
+duration_s = 360
+color = "#16a085"
+music_url = ""
+
+[[events]]
+key = "vina"
+title = "Kalousek: hledání viníka"
+host = "kalousek"
+weight = 1
+duration_s = 360
+color = "#2c3e50"
+music_url = ""
+
+[[events]]
+key = "bourak"
+title = "Bourák: zelená jízda"
+host = "bourak"
+weight = 1
+duration_s = 360
+color = "#27ae60"
+music_url = ""
+
+# LEGENDARY: rare event with a scripted cinematic scene (oku_slack/wheel/events/<script>.toml).
+# Tune `weight` (relative to the others above). Force for testing (only when settings.allow_force = true, which is
+# off in production): /kolo toc snemovna, room "Vynutit legendu" (hidden otherwise) or Engine.spin(force="snemovna").
+[[events]]
+key = "snemovna"
+title = "Mimořádná schůze sněmovny"
+host = "monika"
+legendary = true
+script = "titanic"
+weight = 0.15
+duration_s = 480
+color = "#d4af37"
+music_url = ""

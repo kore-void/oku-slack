@@ -98,3 +98,10 @@ def test_meeting_summary_dm():
     c.start(m, turns=3, sleep=lambda x: None).join(5)
     assert len(dm.posts) == 1 and "3 tahů" in dm.posts[0]["text"] and "3000/600(+900)" in dm.posts[0]["text"]
     assert sum(len(cl.posts) for cl in clients.values()) == 3
+
+def test_conftest_redirects_usage_log_away_from_repo(tmp_path):
+    from oku_slack import core
+    p = usage.usage_log_path()
+    assert p != str(core.ROOT / "logs" / "usage.jsonl") and str(tmp_path) in p
+    usage.record("gemini-2.5-flash", 0, 0.1, {"usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2}})
+    import os; assert os.path.exists(p)

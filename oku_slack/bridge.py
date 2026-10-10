@@ -3,7 +3,7 @@ Tokens per persona from env: SLACK_OKU_<KEY>_BOT_TOKEN / SLACK_OKU_<KEY>_APP_TOK
 (babis falls back to SLACK_OKU_BOT_TOKEN / SLACK_OKU_APP_TOKEN). Gemini keys via env or
 OKU_GEMINI_ENV_FILE. Secrets are never logged; only variable names / present-missing."""
 import os, sys, logging, threading
-from . import core, meeting, usage, followup
+from . import core, meeting, usage, followup, moderation, handoff
 
 FALLBACK = "Technika selhala. To je kampaň!"
 
@@ -38,6 +38,22 @@ class Bridge:
     def prompt_for(self, ch):
         return self.capak_prompt if (self.capak_prompt and ch == self.capak) else self.prompt
 
+    def world_brief(self):
+        """Persona memory brief from oku_world (loopback GET /api/world/brief, short timeout, cached). Failure-isolated:
+        any problem (world down, slow, disabled with [world] brief_in_replies = false) -> "" and the reply works as before."""
+        try:
+            if not (self.cfg.get("world") or {}).get("brief_in_replies", True): return ""
+            from .world import view as world_view
+            return world_view.fetch_brief(self.persona) or ""
+        except Exception as e:
+            core.log.warning("world brief failed: %s", type(e).__name__); return ""
+
+    def system_for(self, ch):
+        p = self.prompt_for(ch); brief = self.world_brief()
+        if not brief: return p
+        from .chatter import MEMORY_LABEL
+        return p + "\n\n" + MEMORY_LABEL + brief
+
     def history(self, event):
         ch = event["channel"]; msgs = [event]
         if event.get("thread_ts"):
@@ -58,13 +74,14 @@ class Bridge:
 
     def handle(self, event):
         if ignored(event, self.bot): return
+        if self.persona == "babis" and self.moderate(event): return
         ch, ts = event["channel"], event.get("thread_ts") or event["ts"]
         text = (event.get("text") or "").replace(f"<@{self.bot}>", "")
         blame = self.cfg.get("blame_followup", False) and self.persona == "babis" and core.is_blame(self.cfg, text)
         core.log.info("event ch=%s ts=%s persona=%s", ch, event["ts"], self.persona)
         hist = self.history(event)
         usage.set_context(persona=self.persona, channel=ch, thread_ts=ts, kind="solo"); usage.take_last()
-        try: reply = (self.gen(self.prompt_for(ch), hist) or "").strip()
+        try: reply = (self.gen(self.system_for(ch), hist) or "").strip()
         except Exception as e:
             core.log.error("llm error: %s", type(e).__name__); reply = FALLBACK
         if reply in meeting.TERSE:
@@ -75,6 +92,11 @@ class Bridge:
             try: k = self.gen(core.build_prompt(self.cfg["personas"]["kalousek"]), hist + [{"role": "user", "content": reply}])
             except Exception as e: core.log.error("llm error: %s", type(e).__name__); k = meeting.KALOUSEK_FALLBACK
             self.post(ch, ts, k)
+
+    def moderate(self, event):
+        """[moderation] invite/kick in allowed private channels (owner only). Never breaks normal replies."""
+        try: return moderation.handle(self.client, self.cfg, self.bot, event)
+        except Exception as e: core.log.warning("moderation failed: %s", type(e).__name__); return False
 
     def report(self):
         try:
@@ -91,6 +113,16 @@ def dispatch(b, event):
         if r == "dup": return "dup"
     threading.Thread(target=b.handle, args=(event,), daemon=True).start(); return "solo"
 
+def route_plain(b, event):
+    """Plain human thread reply (no @mention; arrives only via message.channels, i.e. the Babiš app): live meeting
+    thread -> the meeting answers; live wheel-skit thread -> the event's host persona answers solo. Else None."""
+    c = getattr(b, "coord", None)
+    if c is None or ignored(event, b.bot): return None
+    r = c.route_plain(event)
+    if r is None or r == "meeting": return r
+    core.log.info("plain reply ch=%s ts=%s -> %s (live wheel thread)", event.get("channel"), event.get("ts"), r)
+    threading.Thread(target=c.bridges[r].handle, args=(event,), daemon=True).start(); return r
+
 def register(app, b):
     spawn = lambda ev: dispatch(b, ev)
     @app.event("app_mention")
@@ -102,7 +134,13 @@ def register(app, b):
         if f is not None:
             try: f.on_message(event)
             except Exception as e: core.log.warning("followup on_message failed: %s", type(e).__name__)
-        if event.get("channel_type") == "im" and not ignored(event, b.bot): spawn(event)
+        if event.get("channel_type") == "im" and not ignored(event, b.bot): spawn(event); return
+        # "Andreji, vyhoď X" without @mention (mentions go via app_mention); owner only, others silently ignored
+        if b.persona == "babis" and not ignored(event, b.bot) and f"<@{b.bot}>" not in (event.get("text") or ""):
+            s = moderation.settings(b.cfg)
+            if s and event.get("user") == s["owner"] and b.moderate(event): return
+        try: route_plain(b, event)
+        except Exception as e: core.log.warning("plain reply routing failed: %s", type(e).__name__)
 
 def start_all(cfg, env=None, app_factory=None, handler_factory=None):
     """Start one Socket Mode app per persona with tokens. Returns {key: bridge}."""
@@ -126,6 +164,9 @@ def start_all(cfg, env=None, app_factory=None, handler_factory=None):
             core.log.info("persona=%s connected user=%s", key, uid)
         except Exception as e:
             core.log.error("persona=%s failed to start: %s", key, type(e).__name__)
+    if started:  # wheel -> bridge hand-off: oku_wheel asks for a real porada via logs/outbox (local files only)
+        try: coord.inbox = handoff.Inbox(coord.start_external); coord.inbox.run(); core.log.info("meeting inbox: %s", handoff.outbox())
+        except Exception as e: core.log.error("meeting inbox failed: %s", type(e).__name__)
     rep = usage.Reporter(started["babis"].client, cfg) if "babis" in started else None  # Babiš app DMs Kore
     coord.reporter = rep
     for b in started.values(): b.reporter = rep

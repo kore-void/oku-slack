@@ -99,11 +99,14 @@ ROLE = {
 }
 
 class Meeting:
-    def __init__(self, coord, channel, thread_ts, participants):
+    def __init__(self, coord, channel, thread_ts, participants, source="human", topic="", briefs=None):
         self.c, self.ch, self.ts = coord, channel, thread_ts
+        self.briefs = briefs if isinstance(briefs, dict) else {}  # world porada: {persona: memory brief} (P-003)
         self.participants = participants
         self.stopped = False
         self.turns = 0
+        self.source, self.topic = source, topic  # source: human (@mention) | wheel (oku_wheel hand-off) | world (scheduled)
+        self.wake = threading.Event()  # set by a human reply in the thread: next turn comes sooner
 
     def transcript(self):
         b = self.c.bridges["babis"] if "babis" in self.c.bridges else next(iter(self.c.bridges.values()))
@@ -124,7 +127,7 @@ class Meeting:
             text = (text or "").replace(f"<@{u}>", "@" + self.c.cfg["personas"][k]["name"].split()[0])
         return text
 
-    def run(self, turns=None, sleep=time.sleep, rng=random):
+    def run(self, turns=None, sleep=None, rng=random):
         cfg, n = self.c.cfg, turns or rng.randint(8, 12)
         seen_human = set(); last_speaker, rr = None, 0; history = []
         for i in range(n):
@@ -144,13 +147,23 @@ class Meeting:
                                        blame=core.is_blame(cfg, self.humanize(last_text).lower()), history=history)
             if spk not in self.c.bridges: spk = next(p for p in self.participants if p in self.c.bridges)
             extra = []
-            if i == 0: extra.append("Zahajuješ poradu: přivítej, shrň téma z první zprávy a vyvolej jménem prvního řečníka s požadavkem na čísla.")
+            if i == 0 and self.source == "world":
+                extra.append("Poradu jsi právě svolal svou první zprávou (pravidelná ranní porada OKÚ"
+                             + (f", téma: {self.topic}" if self.topic else "") + "). Neopakuj úvod: rovnou vyvolej jménem prvního řečníka s požadavkem na čísla.")
+            elif i == 0 and self.source == "wheel":
+                extra.append("Poradu jsi právě svolal svou první zprávou (událost z kola štěstí OKÚ"
+                             + (f": {self.topic}" if self.topic else "") + "). Neopakuj úvod: rovnou vyvolej jménem prvního řečníka s požadavkem na čísla.")
+            elif i == 0: extra.append("Zahajuješ poradu: přivítej, shrň téma z první zprávy a vyvolej jménem prvního řečníka s požadavkem na čísla.")
             if final: extra.append("UZAVÍRÁŠ poradu: krátké shrnutí, kdo co slíbil, a finální (vymyšlený) zisk/KPI. Tentokrát žádnou otázku.")
             if interjection: extra.append("Člověk (Kore) právě vstoupil do porady – reaguj nejdřív přímo na jeho poslední zprávu.")
             text = self.c.say(spk, self.ch, self.ts, msgs, extra)
             last_speaker = spk; history.append(spk); self.turns += 1
-            if not final: sleep(rng.uniform(8, 15))
+            if not final: (sleep or self.pause)(rng.uniform(8, 15))
         return n
+
+    def pause(self, d, grace=3.0):
+        """Wait d seconds between turns; a human reply (Coordinator.claim sets wake) cuts it to a short grace."""
+        if self.wake.wait(d): self.wake.clear(); time.sleep(min(grace, d))
 
 class Coordinator:
     def __init__(self, cfg, gen=core.generate, max_seen=2000):
@@ -159,6 +172,7 @@ class Coordinator:
         self.seen = OrderedDict(); self.lock = threading.Lock(); self.max_seen = max_seen
         self.active = {}  # (ch, thread_ts) -> Meeting
         self.reporter = None  # usage.Reporter for end-of-meeting summary DM
+        self.chatters = {}    # channel -> chatter.Chatter (autonomous world chatter, P-005); never a meeting thread
 
     def add(self, key, bridge):
         self.bridges[key] = bridge; self.uid_map[key] = bridge.bot; self.uid_to_persona[bridge.bot] = key
@@ -171,9 +185,11 @@ class Coordinator:
         thread = (event.get("channel"), event.get("thread_ts") or event.get("ts"))
         with self.lock:
             if key in self.seen: return "dup" if self.seen[key] else None
-            if thread in self.active:  # mid-meeting human message: meeting loop handles it
-                self.seen[key] = True; self._trim(); return "dup"
+            if thread in self.active:  # mid-meeting human message: meeting loop handles it (re-reads the thread)
+                self.seen[key] = True; self._trim(); self.active[thread].wake.set(); return "dup"
             trig = is_trigger(event.get("text"), self.uid_map)
+            if trig and self.skit_running(*thread):  # P2: a live wheel skit owns this thread -> plain solo reply
+                core.log.info("meeting trigger ignored ch=%s ts=%s: wheel skit running", thread[0], thread[1]); trig = False
             self.seen[key] = trig; self._trim()
             if not trig: return None
             parts = mentioned_personas(event.get("text"), self.uid_map)
@@ -181,6 +197,116 @@ class Coordinator:
             m = self.active[thread] = Meeting(self, thread[0], thread[1], parts)
         core.log.info("meeting start ch=%s ts=%s participants=%s", thread[0], thread[1], ",".join(parts))
         return m
+
+    def skit_running(self, ch, thread_ts):
+        """True while a scripted wheel skit is still posting in this thread (logs/outbox/live_threads.json)."""
+        try:
+            from . import handoff
+            t = handoff.read_live_threads().get(thread_ts)
+            return bool(t and t.get("channel") == ch and t.get("skit_running"))
+        except Exception as e:
+            core.log.warning("live threads unreadable: %s", type(e).__name__); return False
+
+    def route_plain(self, event):
+        """P0-b: a plain human reply (no persona @mention) in a channel THREAD. Returns 'meeting' when a meeting runs
+        in that thread (its loop answers; next turn woken), a persona key when it is a live wheel-skit thread (that
+        persona answers solo; the event host), else None (unchanged: ignored). Bots never route (loop guard)."""
+        if event.get("bot_id") or event.get("subtype") or event.get("user") in self.uid_to_persona: return None
+        th, ch = event.get("thread_ts"), event.get("channel")
+        if event.get("channel_type") == "im" or not th or th == event.get("ts") or not ch: return None
+        if mentioned_personas(event.get("text"), self.uid_map): return None  # app_mention path owns it
+        key, thread = (ch, event.get("ts")), (ch, th)
+        with self.lock:
+            if key in self.seen: return None
+            if thread in self.active:
+                self.seen[key] = True; self._trim(); self.active[thread].wake.set(); return "meeting"
+        try:
+            from . import handoff
+            live = handoff.read_live_threads().get(th)
+        except Exception as e: core.log.warning("live threads unreadable: %s", type(e).__name__); live = None
+        if not live or live.get("channel") != ch or not self.bridges: return None
+        with self.lock:
+            if key in self.seen: return None
+            self.seen[key] = True; self._trim()
+        host = live.get("host")
+        return host if host in self.bridges else ("babis" if "babis" in self.bridges else next(iter(self.bridges)))
+
+    def busy(self, ch):
+        """A meeting or a world chatter thread is running anywhere in this channel (which includes the given thread)."""
+        return any(c == ch for c, _ in self.active) or ch in self.chatters
+
+    def start_external(self, req):
+        """File hand-off (oku_slack.handoff): real porada in req's channel/thread. Returns started | dup | rejected.
+        Wheel requests carry thread_ts (the wheel posted the opener). World requests (source=world, the oku_world
+        scheduler) carry no thread: the chair (Babiš) posts `opener` top-level first and the porada runs in its thread;
+        then the return value is ("started", {"thread_ts": ts}) so the ack tells the world where it runs.
+        No double porada: refused while any meeting runs in that channel or thread.
+        kind=chatter (oku_world director, P-005) goes to start_chatter: a bounded persona exchange, not a porada."""
+        if req.get("kind") == "chatter": return self.start_chatter(req)
+        ch, ts = req.get("channel"), req.get("thread_ts")
+        world = req.get("source") == "world"
+        if not (ch and self.bridges) or not (ts or (world and (req.get("opener") or "").strip())): return "rejected"
+        with self.lock:
+            if self.busy(ch):
+                core.log.info("%s meeting refused ch=%s ts=%s: meeting already running", "world" if world else "wheel", ch, ts); return "dup"
+            if world and not ts:
+                chair = self.bridges.get("babis") or next(iter(self.bridges.values()))
+                text = re.sub(r"<[@!#][^>]*>", "", req.get("opener") or "").strip()[:600]
+                try: ts = chair.client.chat_postMessage(channel=ch, text=text)["ts"]
+                except Exception as e:
+                    core.log.error("world porada opener failed ch=%s: %s", ch, type(e).__name__); return "error"
+            parts = [k for k in self.uid_map if k != "kalousek"] or list(self.uid_map)
+            m = self.active[(ch, ts)] = Meeting(self, ch, ts, parts, source="world" if world else "wheel", topic=req.get("topic") or "",
+                                                briefs=req.get("briefs") if world else None)
+        core.log.info("meeting start (%s %s) ch=%s ts=%s participants=%s", "world" if world else "wheel",
+                      req.get("slot") if world else req.get("event_id"), ch, ts, ",".join(parts))
+        self.start(m)
+        return ("started", {"thread_ts": ts}) if world else "started"
+
+    def start_chatter(self, req, sleep=None):
+        """World chatter request -> ("started", {thread_ts, turns, personas}) | ("rejected", {reason}) | "dup" | "error".
+        The first persona posts the opener top-level; a thread then runs <= 4 turns (chatter.Chatter) and a second ack
+        "done" reports turns + LLM calls. Refused while a meeting/chatter runs in the channel or a wheel skit is live."""
+        from . import chatter, handoff
+        try: personas, turns = chatter.validate(self.cfg, req, self.bridges)
+        except ValueError as e:
+            core.log.info("world chatter rejected ch=%s: %s", req.get("channel"), e); return ("rejected", {"reason": str(e)})
+        ch = req["channel"]
+        if any(v.get("skit_running") for v in self.live_threads().values()):
+            core.log.info("world chatter refused ch=%s: wheel skit live", ch); return ("rejected", {"reason": "wheel_live"})
+        ch_obj = chatter.Chatter(self, dict(req, personas=personas), turns)
+        if ch_obj.news:   # news reaction: generate it before taking the lock (LLM call), only if the channel is free
+            with self.lock:
+                if self.busy(ch): core.log.info("world chatter refused ch=%s: channel busy", ch); return "dup"
+            try: ch_obj.prepare()
+            except Exception as e: core.log.error("news reaction failed ch=%s: %s", ch, type(e).__name__); return "error"
+        with self.lock:
+            if self.busy(ch): core.log.info("world chatter refused ch=%s: channel busy", ch); return "dup"
+            try: ts = ch_obj.open()
+            except Exception as e:
+                core.log.error("world chatter opener failed ch=%s: %s", ch, type(e).__name__); return "error"
+            self.chatters[ch] = ch_obj
+        core.log.info("chatter start (%s %s) ch=%s ts=%s personas=%s turns=%d", req.get("storylet"), req.get("slot"), ch, ts,
+                      ",".join(personas), turns)
+        def go():
+            status = "done"
+            try: ch_obj.run(sleep=sleep)
+            except Exception as e: core.log.error("chatter crashed: %s", type(e).__name__); status = "error"
+            finally:
+                with self.lock: self.chatters.pop(ch, None)
+                try: handoff.ack(req.get("id"), "stopped" if ch_obj.stopped and status == "done" else status, thread_ts=ts,
+                                 turns=ch_obj.turns, llm_calls=ch_obj.llm_calls, guarded=ch_obj.guarded, fallbacks=ch_obj.fallbacks)
+                except Exception as e: core.log.warning("chatter done ack failed: %s", type(e).__name__)
+                core.log.info("chatter end ch=%s ts=%s turns=%d llm_calls=%d", ch, ts, ch_obj.turns, ch_obj.llm_calls)
+        self.chatter_thread = threading.Thread(target=go, daemon=True, name="chatter"); self.chatter_thread.start()
+        extra = {"reaction": ch_obj.reaction_source} if ch_obj.news else {}
+        return ("started", dict({"thread_ts": ts, "turns": turns, "personas": personas}, **extra))
+
+    def live_threads(self):
+        try:
+            from . import handoff
+            return handoff.read_live_threads()
+        except Exception as e: core.log.warning("live threads unreadable: %s", type(e).__name__); return {}
 
     def _trim(self):
         while len(self.seen) > self.max_seen: self.seen.popitem(last=False)
@@ -213,6 +339,10 @@ class Coordinator:
             lines.append(f"{name}: {meeting.humanize(m.get('text')) if meeting else m.get('text')}")
         names = ", ".join("@" + self.cfg["personas"][k]["name"].split()[0] for k in self.bridges if k != spk)
         system = b.prompt + "\n\n" + MEETING_RULES + "\n" + ROLE.get(spk, "") + f"\nKolegové na poradě: {names}."
+        brief = str(((meeting.briefs if meeting else None) or {}).get(spk) or "")[:600]
+        if brief:
+            from .chatter import MEMORY_LABEL
+            system += "\n" + MEMORY_LABEL + brief
         user = "PŘEPIS PORADY:\n" + "\n".join(lines[-40:]) + "\n\n" + " ".join(extra) + f"\nTeď mluvíš ty ({p['name']})."
         usage.set_context(persona=spk, channel=ch, thread_ts=ts, kind="meeting")
         text = self.generate_ok(spk, system, [{"role": "user", "content": user}])

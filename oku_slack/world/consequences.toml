@@ -1,0 +1,113 @@
+# OKÚ world consequences (ECOSYSTEM-PLAN P-006). Read by oku_slack/world/consequences.py (re-read on change).
+#
+# Each rule that matches a diary row writes ONE `consequence.applied` row (source "consequence",
+# causal_parents = [the trigger row], dedupe_key consequence:<rule id>:<trigger id>) whose payload lists its effects:
+#   resource = "<dotace|kampan|hranolky|lajky>", delta = <int>             resource change (kampan 0-100, hranolky 0-200)
+#   blame = "<persona|player|selector>", blame_n = <int>                    blame +n
+#   relation = { from = "<selector>", to = "<selector>", delta = <int> }    how `from` feels about `to`
+# Selectors: host (wheel event host persona), missing (players who missed a wheel event), actor, lead (first
+# persona of a chatter/podnet), others (participants except lead), participants (every ordered pair), or a literal key.
+# where = { <payload field> = [allowed values] } narrows a rule. The projection only folds the written rows, so a
+# rebuild replays exactly the same consequences; changing this file only affects rows processed afterwards.
+version = 1
+# Dry-run rows (porada.dry_run, chatter.dry_run, podnet.dry_run) count as if the action happened, so the dry run
+# shows plausible world dynamics; the consequence row carries dry_run = true. Set false to ignore them.
+include_dry_run = true
+
+# Starting values (projection seed). P-006 fix: Kampaň started at 35 with a "low" threshold of 50, so the world
+# opened in a permanent campaign crisis (KAMPAN_DOLE / porada topic "kampan" always eligible).
+[seeds]
+dotace = 5000
+kampan = 60
+hranolky = 80
+lajky = 1200
+
+# Storylet / porada-topic thresholds ("low" = strictly below).
+[thresholds]
+kampan_low = 40
+hranolky_low = 60
+
+[[rule]]
+id = "wheel_expired_kampan"
+on = ["wheel.expired"]
+resource = "kampan"
+delta = -3
+relation = { from = "host", to = "missing", delta = -1 }
+
+[[rule]]
+id = "wheel_done_kampan"
+on = ["wheel.done"]
+resource = "kampan"
+delta = 3
+
+[[rule]]
+id = "wheel_done_kantyna_hranolky"
+on = ["wheel.done"]
+where = { key = ["kantyna"] }
+resource = "hranolky"
+delta = 40
+
+[[rule]]
+id = "wheel_vetoed_kampan"
+on = ["wheel.vetoed"]
+resource = "kampan"
+delta = -2
+
+[[rule]]
+id = "porada_held_dotace"
+on = ["porada.started", "porada.dry_run"]
+resource = "dotace"
+delta = 250
+
+[[rule]]
+id = "porada_catering_hranolky"
+on = ["porada.started", "porada.dry_run"]
+resource = "hranolky"
+delta = -10
+
+[[rule]]
+id = "podnet_reacted_lajky"
+on = ["podnet.started", "podnet.dry_run"]
+resource = "lajky"
+delta = 100
+
+[[rule]]
+id = "podnet_reacted_kampan"
+on = ["podnet.started", "podnet.dry_run"]
+where = { kind = ["x_video", "video", "stream"] }
+resource = "kampan"
+delta = 2
+
+[[rule]]
+id = "chatter_rapport"
+on = ["chatter.started", "chatter.dry_run"]
+relation = { from = "participants", to = "participants", delta = 1 }
+
+[[rule]]
+id = "chatter_blame_kalousek"
+on = ["chatter.started", "chatter.dry_run"]
+where = { storylet = ["KALOUSEK_VINA", "PROPADLA_AKCE"] }
+blame = "kalousek"
+blame_n = 1
+relation = { from = "lead", to = "others", delta = -2 }
+
+[[rule]]
+id = "chatter_kantyna_hranolky"
+on = ["chatter.started", "chatter.dry_run"]
+where = { storylet = ["KANTYNA_MENU", "HRANOLKY_DOCHAZEJI", "PORADA_DOZVUK"] }
+resource = "hranolky"
+delta = -5
+
+[[rule]]
+id = "chatter_kampan_push"
+on = ["chatter.started", "chatter.dry_run"]
+where = { storylet = ["KAMPAN_DOLE", "BABIS_CHCE_CISLA"] }
+resource = "kampan"
+delta = 2
+
+[[rule]]
+id = "chatter_viral_lajky"
+on = ["chatter.started", "chatter.dry_run"]
+where = { storylet = ["MARTY_VIRAL", "SLACK_KECY"] }
+resource = "lajky"
+delta = 30

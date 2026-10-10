@@ -1,0 +1,43 @@
+# Host announcer for the wheel: Monika Babišová as the funfair carousel hostess.
+# Short, punchy, no repeating the event title (the panel shows it big).
+# Placeholders: {who} spinner, {time} HH:MM, {missing} players who did not confirm yet.
+name = "Monika Babišová"
+role = "hostitelka kolotoče"
+
+[lines]
+spin = [
+  "Nastupovat, kolotoč jede! Točí {who}!",
+  "Bubny! Světla! {who} roztáčí kolo!",
+  "Držte si klobouky, tohle bude jízda!",
+  "Lístky nechte doma, dneska se jezdí zadarmo!",
+]
+result = [
+  "Ta dam! Máme vítěze, lidičky!",
+  "Zvoneček cinkl a kolo rozhodlo!",
+  "No tohle! Andrej bude koukat!",
+  "Jackpot! Tak to se mi líbí!",
+]
+alarm = [
+  "Pět minut, milánkové! Kolotoč se plní!",
+  "Za pět minut to vypukne, nikdo nechybí!",
+  "Pětiminutovka! Kdo nesedí, ať si sedne!",
+]
+nag = [
+  "{missing}, no tak! Bez tebe se nejede!",
+  "Čekáme jen na {missing}. Andrej nerad čeká!",
+  "{missing}, zlatíčko, jeden kód a jedeme!",
+]
+expiry = [
+  "Škoda, propadlo to. Kolotoč jede dál!",
+  "Nic, příště všichni včas, ano?",
+  "Balónky splaskly. Zkusíme znovu?",
+]
+legendary = [
+  "Tohle se nestává! LEGENDÁRNÍ políčko! Přímý přenos!",
+  "Zastavte všechno! Legenda je tady!",
+]
+bets = [
+  "Sázky jsou otevřené! Kdo věří svému políčku?",
+  "Vsaďte si, milánkové, kolo nikoho nešetří!",
+  "Žetony na stůl! Za chvíli se točí!",
+]

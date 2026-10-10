@@ -68,9 +68,96 @@ dm_user = "U0C6XAN3EG3"
 
 # One-off "awaiting reply" for Babiš's #čapák post to ICIK (state in logs/capak_followup.json; never resends).
 [capak_followup]
-enabled = true
+enabled = false         # D12: finished (logs/capak_followup.json "done": "timeout"); kept for reference only
 channel = "C0C76PTMJ9Z"
 user = "U0C75FSEK2M"
 anchor_ts = "1791365300.705149"
 interval_s = 120
 hard_stop_min = 45
+
+# Babiš invites/kicks members of allowed private channels on command from owner only
+# ("@Andrej_Bures vyhoď @X", "Andreji, pozvi X"). Needs bot scope groups:write (manifests/babis.yaml).
+# Never kicks owner or the bot itself; other users' commands are refused (mention) or ignored (no mention).
+[moderation]
+enabled = true
+allowed_channels = ["C0C76PTMJ9Z"]  # čapák
+owner_user_id = "U0C6XAN3EG3"       # Kore
+
+# OKÚ world core (service oku_world, python -m oku_slack.world.service, loopback 127.0.0.1:8798; docs/WORLD.md).
+# Re-read on change (no restart). dry_run = true: the world only writes diary rows about what it WOULD do; nothing is
+# handed to the bridge and nothing is posted. Env OKU_WORLD_DRY_RUN=0/1 overrides. Kill switch: kill_switch = true,
+# or create logs/world.kill (diary logs dir), or env OKU_WORLD_KILL=1.
+[world]
+dry_run = false                  # LIVE since 2026-10-09 (Kore's go-live: porada, chatter, podnety, news)
+kill_switch = false
+regime = "A_scarce"
+timezone = "Europe/Prague"
+quiet_hours = ["22:00", "08:00"]
+# Standalone scheduled porada (independent of the wheel): a REAL bot porada (meeting.py) via the bridge file hand-off.
+porada_enabled = true
+porada_schedule = "mon-fri 10:00"
+porada_channel = "C0C6W8E6NP9"   # #oku-porada
+porada_grace_min = 30            # a slot later than this (service was down) is skipped, never caught up
+porada_llm_estimate = 12         # LLM calls charged to the world budget per porada (meeting = 8-12 turns)
+porada_ack_timeout_s = 120
+# Budget (decision D2): autonomous actions only; human-triggered replies/poradas never count.
+posts_per_day = 16               # top-level posts per day, all world sources together (6 -> 16 with news, Kore 2026-10-09)
+per_channel_gap_h = 3            # at most 1 top-level post per channel per 3 h
+chatter_threads_per_day = 2      # autonomous persona-to-persona threads (P-005)
+chatter_max_turns = 4            # opener + replies in one thread; the bridge also hard-caps at 4
+llm_calls_per_day = 40
+no_posts_while_wheel_live = true
+tick_s = 15
+# Autonomous persona chatter (P-005, docs/WORLD.md): the director picks a storylet, 2-3 personas and a persona channel
+# per slot; dry_run writes chatter.dry_run only; live hands a kind=chatter line to the bridge, which runs <= 4 turns.
+chatter_enabled = true
+chatter_schedule = "mon-fri 11:30,16:30"
+chatter_grace_min = 30
+chatter_ack_timeout_s = 120      # no 'started' ack by then -> chatter.failed no_ack
+chatter_done_timeout_s = 900     # started but no 'done' ack by then -> chatter.ended timeout
+legacy_wheel_tail = true         # also read the old in-wheel diary (wheel.sqlite3:world_events, read-only) until the outbox wheel is deployed
+# Real-life triggers (P-004, docs/WORLD.md "Podnety"): every feeder drops podnety into <diary logs>/inbox/podnety.jsonl;
+# the reactor plans one persona 'repost' (URL + <= 2 sentences) + optional single reply per podnet, inside the budget.
+podnet_inbox = true
+podnet_react = true
+podnet_reactions_per_day = 2     # reactions to podnety per day (on top of the shared post/LLM budget)
+podnet_reply_rate = 0.5          # chance that a second persona replies once in the repost's thread
+podnet_max_age_h = 6             # a podnet waiting on quiet hours / wheel live / channel gap is dropped after this
+# Persona memory (P-003): briefs (<= 600 chars) go into chatter/porada hand-offs; the bridge also fetches
+# GET /api/world/brief for normal replies (failure-isolated). Consequences (P-006): oku_slack/world/consequences.toml.
+briefs_in_handoff = true
+brief_in_replies = true          # read by the oku_slack bridge (needs the merged code)
+consequences_enabled = true
+# News (OKÚ zpravodajství, docs/WORLD.md "News"): config in oku_slack/world/news.toml (feeds, persona -> real person,
+# news budget: 10 reactions/day, 2 per person/day, 1 h gap, channel #oku-socky). Same dry_run / kill switch / quiet hours.
+
+# Persona channels the chatter may use (world picks; the bridge only accepts these when the table is present).
+[world.chatter_channels]
+kantyna = "C0C7BF296P4"   # #oku-kantyna
+dotace = "C0C75CZ2UCT"    # #oku-dotace-desk
+socky = "C0C76ATANTX"     # #oku-socky
+disko = "C0C75CZPRUK"     # #oku-disko
+vina = "C0C76ATGLAH"      # #oku-vina
+
+# X API v2 poller (P-004): read-only GETs, video posts only, since_id. Runs ONLY when env X_BEARER_TOKEN is set for the
+# oku_world process (user env var; never in this file); without it the service logs "x source disabled: no token" once.
+[world.podnet_x]
+enabled = true
+accounts = ["AndrejBabis"]
+interval_min = 10
+hours = ["08:00", "22:00"]
+video_only = true
+
+# Optional free podnet source via the Perplexity CLI void-pplx-ask (on PATH of the oku_world process, or set command
+# to its full path). Output is untrusted data: only URLs of x.com/twitter.com/youtube.com/twitch.tv/kick.com that
+# match the configured handles/streams (X posts not older than max_age_h by their id) and short titles are kept.
+[world.podnet_pplx]
+enabled = true
+interval_min = 120
+hours = ["08:00", "22:00"]
+accounts = ["AndrejBabis"]
+streams = []                     # e.g. ["twitch:<channel>", "kick:<channel>", "youtube:@<channel>"] (Macinka/Xavera: UNKNOWN)
+mode = "fast"
+timeout_s = 150
+max_age_h = 48
+max_per_run = 3

@@ -1,0 +1,138 @@
+# LEGENDARY scene for event "snemovna" (Mimořádná schůze sněmovny): "Titanic scéna".
+# Romantic comedy, PG-13. Characters are shown only as stylized silhouettes with name tags.
+# Each beat: at = seconds from event start (server time), visual = scene cue for the room, music = audio cue name,
+# caption = lower-third text, direction = stage direction, lines = [[speaker, text], ...].
+title = "Titanic scéna: Macinka a Turek, přímý přenos ze sněmovny"
+duration_s = 480
+credits = "Produkce: Marty Prchal, marketingový génius"
+credits_quote = "Tohle bude mít víc zhlédnutí než celé volební období. Emoce, příď, západ slunce. Algoritmus to miluje."
+
+[cast]
+monika = "Monika Babišová"
+macinka = "Petr Macinka"
+turek = "Filip Turek"
+marty = "Marty Prchal"
+
+[[beats]]
+at = 0
+visual = "benches"
+music = "fanfare"
+caption = "PŘÍMÝ PŘENOS: Mimořádná schůze Poslanecké sněmovny"
+direction = "Prázdné lavice, hodiny nad předsednickým stolem tikají. Kamera pomalu najíždí na řečnický pult."
+lines = [["monika", "Dámy a pánové, kolotoč se zastavil na políčku, které padá jednou za uherský rok. Mimořádná schůze sněmovny. Zapněte si pásy, tohle bude jízda."]]
+
+[[beats]]
+at = 35
+visual = "sunset"
+music = "strings_soft"
+caption = "Sálem se rozlévá západ slunce"
+direction = "Okny sálu proudí oranžové světlo. Lavice se jemně houpou jako paluba. Řečnický pult se mění v příď lodi."
+lines = [["monika", "Podívejte se na to světlo. Takhle hezky tady nesvítilo od schválení rozpočtu."]]
+
+[[beats]]
+at = 70
+visual = "bow"
+music = "strings_soft"
+caption = "Příď u řečnického pultu"
+direction = "Turek stojí u pultu a natahuje ruku. Macinka váhavě přichází s jednacím řádem v podpaží."
+lines = [
+  ["turek", "Peťo. Pojď sem. K pultu. Věříš mi?"],
+  ["macinka", "Filipe, jednací řád tohle nedovoluje."],
+  ["turek", "Jednací řád nedovoluje spoustu věcí. Zavři oči."],
+]
+
+[[beats]]
+at = 110
+visual = "flying"
+music = "heart_theme"
+caption = "Já letím!"
+direction = "Macinka stojí na špičce pultu s rozpaženýma rukama, Turek ho drží v pase. Vítr čechrá kravaty."
+lines = [
+  ["macinka", "Já letím, Filipe! Letím nad celou koalicí!"],
+  ["turek", "Hlavně nepusť ten pozměňovací návrh, odletí ti do opozice."],
+]
+
+[[beats]]
+at = 160
+visual = "portrait"
+music = "piano_soft"
+caption = "Oficiální portrét"
+direction = "Turek u stojanu kreslí uhlem. Macinka sedí v křesle v saku a kravatě, vážný pohled státníka. Žádné odhalování, jen důstojnost."
+lines = [
+  ["macinka", "Nakresli mě jako jednu ze svých veteránek, Filipe."],
+  ["turek", "S osmiválcem v pozadí. Jinak to není portrét, to je kancelářský papír."],
+  ["monika", "Tohle visí v Lánech do Vánoc, to vám slibuju."],
+]
+
+[[beats]]
+at = 210
+visual = "iceberg"
+music = "alarm_brass"
+caption = "Ledovec na obzoru: návrh na vyslovení nedůvěry"
+direction = "Z mlhy se vynoří obrovský bílý ledovec s nápisem NÁVRH NA VYSLOVENÍ NEDŮVĚRY a padesáti podpisy."
+lines = [
+  ["turek", "Ledovec přímo před námi!"],
+  ["macinka", "Kdo ho tam dal? Kalousek?"],
+  ["monika", "Pane předsedající, prosím o klid na palubě!"],
+]
+
+[[beats]]
+at = 255
+visual = "sinking"
+music = "alarm_brass"
+caption = "Hlasuje se"
+direction = "Světla blikají, lavice se naklánějí. Poslanci se drží mikrofonů, zapisovatelka zachraňuje stenozáznam nad hlavou."
+lines = [
+  ["monika", "Hlasování je zahájeno! Kdo je pro, ať se drží zábradlí!"],
+  ["turek", "Peťo, drž se mě. A drž se klubu."],
+]
+
+[[beats]]
+at = 300
+visual = "plank"
+music = "piano_soft"
+caption = "Víko od lavice"
+direction = "Noční moře uprostřed sálu. Macinka leží na plovoucím víku od poslanecké lavice, Turek se drží okraje."
+lines = [
+  ["macinka", "Filipe, na tohle víko se vejdeme oba."],
+  ["turek", "Nevejdeme. Četl jsem zápis z jednání. Je schválené pro jednoho."],
+  ["macinka", "Tak podáme pozměňovák."],
+]
+
+[[beats]]
+at = 345
+visual = "never_let_go"
+music = "heart_theme"
+caption = "Nikdy tě nepustím"
+direction = "Ruce propletené přes okraj víka. Svítí jediný reflektor."
+lines = [
+  ["turek", "Slib mi, že dotáhneš ten zákon o spalovácích."],
+  ["macinka", "Slibuju. Nikdy tě nepustím, Filipe. Nikdy!"],
+]
+
+[[beats]]
+at = 390
+visual = "rescue"
+music = "heart_full"
+caption = "Výsledek: návrh nepřijat o jeden hlas"
+direction = "Tabule ukáže výsledek hlasování. Moře zmizí, oba se zvednou z lavic, mokří, ale v kravatách. Sál tleská."
+lines = [
+  ["monika", "Vláda přežila! A láska taky! O jeden hlas, lidičky, o jeden jediný hlas!"],
+  ["turek", "Říkal jsem ti, že to ustojíme."],
+]
+
+[[beats]]
+at = 425
+visual = "confetti"
+music = "fanfare"
+caption = "Konfety!"
+direction = "Z galerie padají konfety v barvách trikolóry. Monika mává z předsednického stolu."
+lines = [["monika", "Konfety, prosím! Tohle byla nejkrásnější schůze v dějinách kolotoče!"]]
+
+[[beats]]
+at = 455
+visual = "credits"
+music = "heart_full"
+caption = "Produkce: Marty Prchal, marketingový génius"
+direction = "Titulky na černém pozadí. Silueta Martyho s telefonem v ruce."
+lines = [["marty", "Tohle bude mít víc zhlédnutí než celé volební období. Emoce, příď, západ slunce. Algoritmus to miluje."]]
